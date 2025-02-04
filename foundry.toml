@@ -1,0 +1,41 @@
+# Default "production" profile.
+# Reference build time 13s
+[profile.default]
+solc-version = "0.8.28"
+optimizer = true
+optimizer-runs = 10000
+evm_version = "cancun"
+libs = ["lib"]
+src = "contracts"
+out = "out"
+test = "test"
+broadcast = "broadcast"
+cache_path = "cache"
+fs_permissions = [
+    { access = "read", path = "out"},
+    { access = "read-write", path = "deployments"}
+]
+
+# Use FOUNDRY_PROFILE=lite for quicker compilation.
+# Reference build time 6s
+[profile.lite]
+optimizer = false
+
+# Use FOUNDRY_PROFILE=yul to use the "yul" intermediate representation for
+# optimization. Caution - this is VERY slow!
+# Reference build time 2m45s
+[profile.yul]
+via_ir = true
+
+# Use FOUNDRY_PROFILE=yul-lite to use the "yul" intermediate representation
+# without any optimization, for quicker compilation for tests.
+# Reference build time 33s
+[profile.yul-lite]
+via_ir = true
+
+[profile.yul-lite.optimizer_details.yulDetails]
+optimizerSteps = ''
+
+[fmt]
+bracket_spacing = true
+

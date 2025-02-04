@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "tools/typescript"
+    ]
+  },
+  "scripts": {
+    "tools": "bun run --filter sportsinference-contract-tools --cwd ${PWD}"
+  }
+}
