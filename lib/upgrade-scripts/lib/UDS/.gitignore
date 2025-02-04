@@ -1,0 +1,21 @@
+!.prettierrc
+!.vscode
+!.gas-snapshot
+!.env.example
+
+node_modules
+.env
+coverage
+coverage.json
+typechain
+
+json
+
+out
+broadcast
+
+#Hardhat files
+cache
+artifacts
+
+lcov.info
