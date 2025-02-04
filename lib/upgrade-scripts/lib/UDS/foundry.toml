@@ -1,6 +1,0 @@
-[profile.default]
-solc = "0.8.17"
-bytecode_hash = "none"
-optimizer_runs = 1_000_000
-
-# fuzz_runs = 30_000
