@@ -43,12 +43,13 @@ abstract contract DeployBase is OpenZeppelinDeployments {
     }
 }
 
-contract DeployEthereum is DeployBase {
+contract Deploy is DeployBase {
     Markets public markets;
 
     function setUpContracts() internal override {
         {
-            address implementation = setUpContract("Markets", "", "", false);
+            bytes memory constructorArgs = abi.encode(admin);
+            address implementation = setUpContract("Markets", constructorArgs, "", false);
             markets = Markets(implementation);
         }
     }
