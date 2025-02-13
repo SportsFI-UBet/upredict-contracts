@@ -14,6 +14,7 @@ import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/Mes
 import { UD60x18, ud60x18, unwrap, uUNIT, UNIT } from "@prb/math/UD60x18.sol";
 
 import {
+    IMarkets,
     MarketsBase,
     Markets,
     MarketBlob,
@@ -148,7 +149,7 @@ contract MarketsTest is Test {
         // Prepare alice to bet
         uint96 aliceBetAmount = 10e18;
         Markets.BetInfo memory aliceBetInfo = Markets.BetInfo({
-            request: MarketsBase.BetRequest({
+            request: IMarkets.BetRequest({
                 token: erc20,
                 amount: aliceBetAmount,
                 from: alice,
