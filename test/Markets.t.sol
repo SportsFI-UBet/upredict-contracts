@@ -160,37 +160,52 @@ contract MarketsTest is Test {
         return MarketContext({ marketInfo: marketInfo, marketBlob: marketBlob, marketCommitment: marketCommitment });
     }
 
+    struct BetContext {
+        ParimutuelMarkets.BetInfo betInfo;
+        BetBlob betBlob;
+        BetCommitment betCommitment;
+    }
+
+    function makeBetContext(
+        address user,
+        uint256 amount,
+        uint256 option,
+        uint256 nonce,
+        MarketCommitment marketCommitment
+    ) public view returns (BetContext memory) {
+        ParimutuelMarkets.BetInfo memory betInfo = ParimutuelMarkets.BetInfo({
+            request: IMarkets.BetRequest({
+                token: erc20,
+                amount: uint96(amount),
+                from: user,
+                nonce: uint96(nonce),
+                submissionDeadlineBlock: submissionDeadlineBlock
+            }),
+            hidden: ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: option, salt: 0x42 })
+        });
+        BetBlob memory betBlob = BetBlob({ data: abi.encode(betInfo) });
+        BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
+
+        return BetContext({ betInfo: betInfo, betBlob: betBlob, betCommitment: betCommitment });
+    }
+
     function testEndToEnd() public {
         MarketContext memory marketContext = makeMarketContext();
 
         // Prepare alice to bet
-        ParimutuelMarkets.BetInfo memory aliceBetInfo = ParimutuelMarkets.BetInfo({
-            request: IMarkets.BetRequest({
-                token: erc20,
-                amount: 10e18,
-                from: alice,
-                nonce: 0,
-                submissionDeadlineBlock: submissionDeadlineBlock
-            }),
-            hidden: ParimutuelMarkets.BetHiddenInfo({
-                marketCommitment: marketContext.marketCommitment,
-                option: 1,
-                salt: 0x42
-            })
-        });
-        BetBlob memory aliceBetBlob = BetBlob({ data: abi.encode(aliceBetInfo) });
-        BetCommitment aliceBetCommitment = BetCommitment.wrap(keccak256(aliceBetBlob.data));
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
 
         // Approve erc20 and make bet
-        placeBet(alice, aliceBetInfo.request, aliceBetCommitment);
+        placeBet(alice, aliceBetContext.betInfo.request, aliceBetContext.betCommitment);
         vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
 
         // Prepare bob to bet
-        ParimutuelMarkets.BetInfo memory bobBetInfo = abi.decode(aliceBetBlob.data, (ParimutuelMarkets.BetInfo));
+        ParimutuelMarkets.BetInfo memory bobBetInfo =
+            abi.decode(aliceBetContext.betBlob.data, (ParimutuelMarkets.BetInfo));
         bobBetInfo.request.from = bob;
         bobBetInfo.request.amount = 20e18;
         bobBetInfo.hidden.option = 0;
-        vm.assertNotEq(bobBetInfo.hidden.option, aliceBetInfo.hidden.option);
+        vm.assertNotEq(bobBetInfo.hidden.option, aliceBetContext.betInfo.hidden.option);
         BetBlob memory bobBetBlob = BetBlob({ data: abi.encode(bobBetInfo) });
         BetCommitment bobBetCommitment = BetCommitment.wrap(keccak256(bobBetBlob.data));
 
@@ -201,9 +216,9 @@ contract MarketsTest is Test {
         ParimutuelMarkets.ResultInfo memory resultInfo;
         {
             // Normalization is losing balances divided by winning pool balances
-            UD60x18 normalization = ud60x18(uUNIT * bobBetInfo.request.amount / aliceBetInfo.request.amount);
+            UD60x18 normalization = ud60x18(uUNIT * bobBetInfo.request.amount / aliceBetContext.betInfo.request.amount);
             resultInfo = ParimutuelMarkets.ResultInfo({
-                winningOption: aliceBetInfo.hidden.option, // alice should win
+                winningOption: aliceBetContext.betInfo.hidden.option, // alice should win
                 normalization: normalization
             });
         }
@@ -216,7 +231,7 @@ contract MarketsTest is Test {
         markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
 
         // Reveal each bet. Alice should get back the whole pot
-        uint256 totalBetAmount = bobBetInfo.request.amount + aliceBetInfo.request.amount;
+        uint256 totalBetAmount = bobBetInfo.request.amount + aliceBetContext.betInfo.request.amount;
         vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount, "All money is in pool");
 
         vm.expectEmit(true, true, true, true);
@@ -227,10 +242,63 @@ contract MarketsTest is Test {
 
         vm.expectEmit(true, true, true, true);
         emit IMarkets.MarketsBetRevealed(
-            aliceBetCommitment, marketContext.marketCommitment, erc20, alice, totalBetAmount
+            aliceBetContext.betCommitment, marketContext.marketCommitment, erc20, alice, totalBetAmount
         );
-        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetBlob);
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.betBlob);
         vm.assertEq(erc20.balanceOf(address(markets)), 0, "Alice claimed her winnings");
         vm.assertEq(erc20.balanceOf(address(alice)), totalBetAmount, "Alice received her winnings");
+    }
+
+    function testBetLimits(uint256 lowerLimit, uint256 upperLimit) public {
+        lowerLimit = bound(lowerLimit, 1, type(uint96).max - 1);
+        upperLimit = bound(upperLimit, lowerLimit, type(uint96).max - 1);
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Change limits
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, alice, bytes32(0))
+        );
+        markets.setLimits(lowerLimit, upperLimit);
+
+        vm.prank(admin);
+        markets.setLimits(lowerLimit, upperLimit);
+
+        // Approve markets for infinity
+        uint256 amount = lowerLimit;
+        erc20.mint(alice, amount);
+        vm.prank(alice);
+        erc20.approve(address(markets), type(uint256).max);
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, amount, 1, 0, marketContext.marketCommitment);
+
+        // Staying within limits works
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.betInfo.request, aliceBetContext.betCommitment);
+
+        // Going below reverts
+        amount = lowerLimit - 1;
+        aliceBetContext = makeBetContext(alice, amount, 1, 1, marketContext.marketCommitment);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ParimutuelMarkets.MarketsBetRequestOutsideLimits.selector, aliceBetContext.betCommitment, amount
+            )
+        );
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.betInfo.request, aliceBetContext.betCommitment);
+
+        // Going above reverts
+        amount = upperLimit + 1;
+        aliceBetContext = makeBetContext(alice, amount, 1, 1, marketContext.marketCommitment);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ParimutuelMarkets.MarketsBetRequestOutsideLimits.selector, aliceBetContext.betCommitment, amount
+            )
+        );
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.betInfo.request, aliceBetContext.betCommitment);
     }
 }

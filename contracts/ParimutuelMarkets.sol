@@ -5,8 +5,8 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import { UD60x18, ud60x18, unwrap } from "@prb/math/UD60x18.sol";
 
-import { MarketsBase } from "./MarketsBase.sol";
-import { MarketCommitment, ResultCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
+import { IMarkets, MarketsBase } from "./MarketsBase.sol";
+import { BetCommitment, MarketCommitment, ResultCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
 
 contract ParimutuelMarkets is MarketsBase {
     struct MarketInfo {
@@ -44,7 +44,25 @@ contract ParimutuelMarkets is MarketsBase {
         BetHiddenInfo hidden;
     }
 
-    constructor(address admin) MarketsBase(admin) { }
+    uint128 public betLowerLimit;
+    uint128 public betUpperLimit;
+
+    error MarketsBetRequestOutsideLimits(BetCommitment betCommitment, uint256 amount);
+
+    constructor(address admin) MarketsBase(admin) {
+        betUpperLimit = type(uint128).max;
+    }
+
+    function setLimits(uint256 _betLowerLimit, uint256 _betUpperLimit) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        betLowerLimit = uint128(_betLowerLimit);
+        betUpperLimit = uint128(_betUpperLimit);
+    }
+
+    function _verifyRequest(IMarkets.BetRequest calldata request, BetCommitment betCommitment) internal view override {
+        if (request.amount < betLowerLimit || request.amount > betUpperLimit) {
+            revert MarketsBetRequestOutsideLimits(betCommitment, request.amount);
+        }
+    }
 
     function _verifyResult(
         MarketCommitment marketCommitment,

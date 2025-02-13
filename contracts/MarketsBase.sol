@@ -82,7 +82,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         //   Therefore need to store AccessControl permissions for addresses
         //   recovered through ecrecover. Can enable several signers to sign
 
-        // TODO: any hooks needed for the derived contract?
+        _verifyRequest(bet, betCommitment);
 
         bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
 
@@ -147,6 +147,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
         emit MarketsBetRevealed(betCommitment, marketCommitment, token, to, amount);
     }
+
+    /**
+     * Hook to check that request is able to be fulfilled
+     */
+    function _verifyRequest(IMarkets.BetRequest calldata request, BetCommitment betCommitment) internal view virtual;
 
     /**
      * Hook to derive the payout from the bet blob
