@@ -13,17 +13,16 @@ import { ERC2771Forwarder } from "@openzeppelin/contracts/metatx/ERC2771Forwarde
 import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import { UD60x18, ud60x18, unwrap, uUNIT, UNIT } from "@prb/math/UD60x18.sol";
 
+import { IMarkets } from "../contracts/IMarkets.sol";
 import {
-    IMarkets,
-    MarketsBase,
-    ParimutuelMarkets,
-    MarketBlob,
     MarketCommitment,
-    BetBlob,
+    ResultCommitment,
     BetCommitment,
+    MarketBlob,
     ResultBlob,
-    ResultCommitment
-} from "../contracts/ParimutuelMarkets.sol";
+    BetBlob
+} from "../contracts/Commitments.sol";
+import { MarketsBase, ParimutuelMarkets } from "../contracts/ParimutuelMarkets.sol";
 
 /// @dev Adapted from guide on testing EIP712 signatures for foundry:
 /// https://book.getfoundry.sh/tutorials/testing-eip712?highlight=712#testing-eip-712-signatures
@@ -136,27 +135,48 @@ contract MarketsTest is Test {
         vm.prank(user);
         erc20.approve(address(markets), request.amount);
 
+        vm.expectEmit(false, false, false, true);
+        emit IMarkets.MarketsBetPlaced(request, betCommitment);
         vm.prank(user);
         markets.placeBet(request, betCommitment);
     }
 
-    function testEndToEnd() public {
-        ParimutuelMarkets.MarketInfo memory marketInfo =
-            ParimutuelMarkets.MarketInfo({ creator: creator, deadlineBlock: marketDeadlineBlock, marketId: 0x42, numOutcomes: 2 });
+    struct MarketContext {
+        ParimutuelMarkets.MarketInfo marketInfo;
+        MarketBlob marketBlob;
+        MarketCommitment marketCommitment;
+    }
+
+    function makeMarketContext() public view returns (MarketContext memory) {
+        ParimutuelMarkets.MarketInfo memory marketInfo = ParimutuelMarkets.MarketInfo({
+            creator: creator,
+            deadlineBlock: marketDeadlineBlock,
+            marketId: 0x42,
+            numOutcomes: 2
+        });
         MarketBlob memory marketBlob = MarketBlob({ data: abi.encode(marketInfo) });
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
 
+        return MarketContext({ marketInfo: marketInfo, marketBlob: marketBlob, marketCommitment: marketCommitment });
+    }
+
+    function testEndToEnd() public {
+        MarketContext memory marketContext = makeMarketContext();
+
         // Prepare alice to bet
-        uint96 aliceBetAmount = 10e18;
         ParimutuelMarkets.BetInfo memory aliceBetInfo = ParimutuelMarkets.BetInfo({
             request: IMarkets.BetRequest({
                 token: erc20,
-                amount: aliceBetAmount,
+                amount: 10e18,
                 from: alice,
                 nonce: 0,
                 submissionDeadlineBlock: submissionDeadlineBlock
             }),
-            hidden: ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: 1, salt: 0x42 })
+            hidden: ParimutuelMarkets.BetHiddenInfo({
+                marketCommitment: marketContext.marketCommitment,
+                option: 1,
+                salt: 0x42
+            })
         });
         BetBlob memory aliceBetBlob = BetBlob({ data: abi.encode(aliceBetInfo) });
         BetCommitment aliceBetCommitment = BetCommitment.wrap(keccak256(aliceBetBlob.data));
@@ -166,10 +186,9 @@ contract MarketsTest is Test {
         vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
 
         // Prepare bob to bet
-        uint96 bobBetAmount = 20e18;
         ParimutuelMarkets.BetInfo memory bobBetInfo = abi.decode(aliceBetBlob.data, (ParimutuelMarkets.BetInfo));
         bobBetInfo.request.from = bob;
-        bobBetInfo.request.amount = bobBetAmount;
+        bobBetInfo.request.amount = 20e18;
         bobBetInfo.hidden.option = 0;
         vm.assertNotEq(bobBetInfo.hidden.option, aliceBetInfo.hidden.option);
         BetBlob memory bobBetBlob = BetBlob({ data: abi.encode(bobBetInfo) });
@@ -182,7 +201,7 @@ contract MarketsTest is Test {
         ParimutuelMarkets.ResultInfo memory resultInfo;
         {
             // Normalization is losing balances divided by winning pool balances
-            UD60x18 normalization = ud60x18(uUNIT * bobBetAmount / aliceBetAmount);
+            UD60x18 normalization = ud60x18(uUNIT * bobBetInfo.request.amount / aliceBetInfo.request.amount);
             resultInfo = ParimutuelMarkets.ResultInfo({
                 winningOption: aliceBetInfo.hidden.option, // alice should win
                 normalization: normalization
@@ -192,17 +211,26 @@ contract MarketsTest is Test {
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
 
         bytes memory resultSignature = signCommitment(resultCommitment);
-        markets.revealMarketResult(marketBlob, resultBlob, resultSignature);
+        vm.expectEmit(true, false, false, true);
+        emit IMarkets.MarketsResultRevealed(marketContext.marketCommitment, resultCommitment);
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
 
         // Reveal each bet. Alice should get back the whole pot
-        vm.assertEq(erc20.balanceOf(address(markets)), aliceBetAmount + bobBetAmount, "All money is in pool");
+        uint256 totalBetAmount = bobBetInfo.request.amount + aliceBetInfo.request.amount;
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount, "All money is in pool");
 
-        markets.revealBet(marketBlob, resultBlob, bobBetBlob);
-        vm.assertEq(erc20.balanceOf(address(markets)), aliceBetAmount + bobBetAmount);
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(bobBetCommitment, marketContext.marketCommitment, erc20, bob, 0);
+        markets.revealBet(marketContext.marketBlob, resultBlob, bobBetBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount);
         vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
 
-        markets.revealBet(marketBlob, resultBlob, aliceBetBlob);
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            aliceBetCommitment, marketContext.marketCommitment, erc20, alice, totalBetAmount
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetBlob);
         vm.assertEq(erc20.balanceOf(address(markets)), 0, "Alice claimed her winnings");
-        vm.assertEq(erc20.balanceOf(address(alice)), aliceBetAmount + bobBetAmount, "Alice received her winnings");
+        vm.assertEq(erc20.balanceOf(address(alice)), totalBetAmount, "Alice received her winnings");
     }
 }

@@ -9,7 +9,15 @@ import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol"
 
 import { MarketsErrors } from "./MarketsErrors.sol";
 import { IMarkets } from "./IMarkets.sol";
-import { MarketCommitment, ResultCommitment, BetCommitment, MarketBlob, ResultBlob, BetBlob, nullResultCommitment } from "./Commitments.sol";
+import {
+    MarketCommitment,
+    ResultCommitment,
+    BetCommitment,
+    MarketBlob,
+    ResultBlob,
+    BetBlob,
+    nullResultCommitment
+} from "./Commitments.sol";
 
 // TODO: ERC2771 Context? for metatx
 abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl {
@@ -78,7 +86,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
         bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
 
-        // TODO: event
+        emit MarketsBetPlaced(bet, betCommitment);
     }
 
     /**
@@ -109,7 +117,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
         marketResults[marketCommitment] = resultCommitment;
 
-        // TODO: event
+        emit MarketsResultRevealed(marketCommitment, resultCommitment);
     }
 
     /**
@@ -126,6 +134,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             revert MarketsInconsistentResult(marketCommitment, resultCommitment);
         }
 
+        BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
         // TODO: think about re-entrancy
         // TODO: think about repeated payouts for same bet
 
@@ -136,7 +145,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             token.safeTransfer(to, amount);
         }
 
-        // TODO: event
+        emit MarketsBetRevealed(betCommitment, marketCommitment, token, to, amount);
     }
 
     /**

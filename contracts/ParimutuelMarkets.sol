@@ -5,8 +5,8 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import { UD60x18, ud60x18, unwrap } from "@prb/math/UD60x18.sol";
 
-import { IMarkets, MarketsBase } from "./MarketsBase.sol";
-import { MarketCommitment, ResultCommitment, BetCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
+import { MarketsBase } from "./MarketsBase.sol";
+import { MarketCommitment, ResultCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
 
 contract ParimutuelMarkets is MarketsBase {
     struct MarketInfo {
@@ -74,9 +74,9 @@ contract ParimutuelMarkets is MarketsBase {
 
         // TODO: any more sanity checks?
 
+        token = betInfo.request.token;
+        to = betInfo.request.from;
         if (betInfo.hidden.option == resultInfo.winningOption) {
-            token = betInfo.request.token;
-            to = betInfo.request.from;
             // TODO: take care of fees
             amount = betInfo.request.amount + unwrap(ud60x18(betInfo.request.amount) * resultInfo.normalization);
         }

@@ -3,10 +3,9 @@ pragma solidity ^0.8.28;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-import { BetCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
+import { MarketCommitment, ResultCommitment, BetCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
 
 interface IMarkets {
-
     struct BetRequest {
         // TODO: implementation version? Make sure it matches the contract implementation
         IERC20 token;
@@ -19,7 +18,15 @@ interface IMarkets {
         uint256 submissionDeadlineBlock;
     }
 
-    // TODO: define events
+    event MarketsBetPlaced(BetRequest bet, BetCommitment betCommitment);
+    event MarketsResultRevealed(MarketCommitment indexed marketCommitment, ResultCommitment resultCommitment);
+    event MarketsBetRevealed(
+        BetCommitment indexed betCommitment,
+        MarketCommitment marketCommitment,
+        IERC20 indexed token,
+        address indexed user,
+        uint256 payout
+    );
 
     /**
      * Place a bet according to the request, signed offchain by the backend.
