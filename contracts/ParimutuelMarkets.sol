@@ -1,4 +1,3 @@
-// solhint-disable one-contract-per-file
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
@@ -9,8 +8,7 @@ import { UD60x18, ud60x18, unwrap } from "@prb/math/UD60x18.sol";
 import { IMarkets, MarketsBase } from "./MarketsBase.sol";
 import { MarketCommitment, ResultCommitment, BetCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
 
-// TODO: rename Parimutuel
-contract Markets is MarketsBase {
+contract ParimutuelMarkets is MarketsBase {
     struct MarketInfo {
         address creator;
         /**

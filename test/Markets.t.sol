@@ -16,14 +16,14 @@ import { UD60x18, ud60x18, unwrap, uUNIT, UNIT } from "@prb/math/UD60x18.sol";
 import {
     IMarkets,
     MarketsBase,
-    Markets,
+    ParimutuelMarkets,
     MarketBlob,
     MarketCommitment,
     BetBlob,
     BetCommitment,
     ResultBlob,
     ResultCommitment
-} from "../contracts/Markets.sol";
+} from "../contracts/ParimutuelMarkets.sol";
 
 /// @dev Adapted from guide on testing EIP712 signatures for foundry:
 /// https://book.getfoundry.sh/tutorials/testing-eip712?highlight=712#testing-eip-712-signatures
@@ -90,7 +90,7 @@ contract MockERC20 is ERC20 {
 
 contract MarketsTest is Test {
     MockERC20 public erc20;
-    Markets public markets;
+    ParimutuelMarkets public markets;
 
     address public admin;
     address public alice;
@@ -112,7 +112,7 @@ contract MarketsTest is Test {
         (resultSigner, resultSignerPrivateKey) = makeAddrAndKey("result-signer");
 
         erc20 = new MockERC20();
-        markets = new Markets(admin);
+        markets = new ParimutuelMarkets(admin);
         submissionDeadlineBlock = block.number + 100;
         marketDeadlineBlock = block.number + 1000;
 
@@ -141,14 +141,14 @@ contract MarketsTest is Test {
     }
 
     function testEndToEnd() public {
-        Markets.MarketInfo memory marketInfo =
-            Markets.MarketInfo({ creator: creator, deadlineBlock: marketDeadlineBlock, marketId: 0x42, numOutcomes: 2 });
+        ParimutuelMarkets.MarketInfo memory marketInfo =
+            ParimutuelMarkets.MarketInfo({ creator: creator, deadlineBlock: marketDeadlineBlock, marketId: 0x42, numOutcomes: 2 });
         MarketBlob memory marketBlob = MarketBlob({ data: abi.encode(marketInfo) });
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
 
         // Prepare alice to bet
         uint96 aliceBetAmount = 10e18;
-        Markets.BetInfo memory aliceBetInfo = Markets.BetInfo({
+        ParimutuelMarkets.BetInfo memory aliceBetInfo = ParimutuelMarkets.BetInfo({
             request: IMarkets.BetRequest({
                 token: erc20,
                 amount: aliceBetAmount,
@@ -156,7 +156,7 @@ contract MarketsTest is Test {
                 nonce: 0,
                 submissionDeadlineBlock: submissionDeadlineBlock
             }),
-            hidden: Markets.BetHiddenInfo({ marketCommitment: marketCommitment, option: 1, salt: 0x42 })
+            hidden: ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: 1, salt: 0x42 })
         });
         BetBlob memory aliceBetBlob = BetBlob({ data: abi.encode(aliceBetInfo) });
         BetCommitment aliceBetCommitment = BetCommitment.wrap(keccak256(aliceBetBlob.data));
@@ -167,7 +167,7 @@ contract MarketsTest is Test {
 
         // Prepare bob to bet
         uint96 bobBetAmount = 20e18;
-        Markets.BetInfo memory bobBetInfo = abi.decode(aliceBetBlob.data, (Markets.BetInfo));
+        ParimutuelMarkets.BetInfo memory bobBetInfo = abi.decode(aliceBetBlob.data, (ParimutuelMarkets.BetInfo));
         bobBetInfo.request.from = bob;
         bobBetInfo.request.amount = bobBetAmount;
         bobBetInfo.hidden.option = 0;
@@ -179,11 +179,11 @@ contract MarketsTest is Test {
         vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
 
         // Reveal market result
-        Markets.ResultInfo memory resultInfo;
+        ParimutuelMarkets.ResultInfo memory resultInfo;
         {
             // Normalization is losing balances divided by winning pool balances
             UD60x18 normalization = ud60x18(uUNIT * bobBetAmount / aliceBetAmount);
-            resultInfo = Markets.ResultInfo({
+            resultInfo = ParimutuelMarkets.ResultInfo({
                 winningOption: aliceBetInfo.hidden.option, // alice should win
                 normalization: normalization
             });
