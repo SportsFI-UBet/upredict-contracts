@@ -666,6 +666,7 @@ contract UpgradeScripts is Script {
         if (chainId == 31_338) return true; // Anvil
         if (chainId == 80_001) return true; // Mumbai
         if (chainId == 80_002) return true; // Amoy
+        if (chainId == 84532) return true; // Base sepolia
         if (chainId == 421_611) return true; // Arbitrum
         if (chainId == 11_155_111) return true; // Sepolia
 
