@@ -6,7 +6,7 @@ pragma solidity ^0.8.28;
 
 // import { console2 } from "forge-std/console2.sol";
 
-import { Markets } from "../contracts/Markets.sol";
+import { ParimutuelMarkets } from "../contracts/ParimutuelMarkets.sol";
 import { OpenZeppelinDeployments } from "./OpenZeppelinDeployments.s.sol";
 
 // environment variables for parameters to script
@@ -44,13 +44,13 @@ abstract contract DeployBase is OpenZeppelinDeployments {
 }
 
 contract Deploy is DeployBase {
-    Markets public markets;
+    ParimutuelMarkets public parimutuelMarkets;
 
     function setUpContracts() internal override {
         {
             bytes memory constructorArgs = abi.encode(admin);
-            address implementation = setUpContract("Markets", constructorArgs, "", false);
-            markets = Markets(implementation);
+            address implementation = setUpContract("ParimutuelMarkets", constructorArgs, "", false);
+            parimutuelMarkets = ParimutuelMarkets(implementation);
         }
     }
 }
