@@ -62,9 +62,10 @@ contract ParimutuelMarkets is MarketsBase {
     }
 
     function _verifyRequest(BetRequest calldata request, RequestCommitment requestCommitment) internal view override {
-        if (request.amount < betLowerLimit || request.amount > betUpperLimit) {
-            revert MarketsBetRequestOutsideLimits(requestCommitment, request.amount);
-        }
+        require(
+            request.amount >= betLowerLimit && request.amount <= betUpperLimit,
+            MarketsBetRequestOutsideLimits(requestCommitment, request.amount)
+        );
     }
 
     function _verifyResult(
@@ -74,14 +75,12 @@ contract ParimutuelMarkets is MarketsBase {
         ResultBlob calldata resultBlob
     ) internal view override {
         MarketInfo memory marketInfo = abi.decode(marketBlob.data, (MarketInfo));
-        if (marketInfo.deadlineBlock < block.number) {
-            revert MarketsResultTooEarly(marketCommitment, block.number);
-        }
+        require(marketInfo.deadlineBlock >= block.number, MarketsResultTooEarly(marketCommitment, block.number));
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
-        if (resultInfo.winningOption >= marketInfo.numOutcomes) {
-            revert MarketsInvalidResult(marketCommitment, resultCommitment);
-        }
+        require(
+            resultInfo.winningOption < marketInfo.numOutcomes, MarketsInvalidResult(marketCommitment, resultCommitment)
+        );
     }
 
     function _getPayout(

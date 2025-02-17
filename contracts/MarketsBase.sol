@@ -29,8 +29,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      * Stored on the blockchain to reference during reveal phase
      */
     struct BetState {
-        // TODO: not sure what is needed here beside the fact that "it exists"
-        uint256 amount;
+        uint96 amount;
     }
 
     /**
@@ -60,34 +59,26 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      * @inheritdoc IMarkets
      */
     function placeBet(BetRequest calldata bet, bytes calldata requestSignature) external {
-        if (_msgSender() != bet.from) {
-            revert MarketsWrongSender(_msgSender());
-        }
+        require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
-        bets[requestCommitment] = BetState({ amount: bet.amount });
 
         address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
         _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
-        if (bet.nonce != expectedNonce) {
-            revert MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce);
-        }
-        userNonces[bet.from]++;
+        require(bet.nonce == expectedNonce, MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce));
 
-        // TODO: betCommitment must include the BetRequest as part of it - i.e. BetBlob includes BetRequest by default
+        _verifyRequest(bet, requestCommitment);
 
         // TODO: take care of fees
 
-        // TODO:
-        // Need to prevent bets to be entered past the market deadline without revealing the deadline or the market.
-        // - if we sign the blob with some specific private key and do ecrecover, we can make backend arbiter of bets.
-        //   Therefore need to store AccessControl permissions for addresses
-        //   recovered through ecrecover. Can enable several signers to sign
-
-        _verifyRequest(bet, requestCommitment);
+        // It should not be possible to have bet with the same bet commitment entered already.
+        // The commitment includes the nonce, which prevents replay attacks.
+        assert(bets[requestCommitment].amount == 0);
+        bets[requestCommitment] = BetState({ amount: bet.amount });
+        userNonces[bet.from]++;
 
         bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
 
@@ -114,9 +105,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         if (existingCommitment == resultCommitment) {
             return;
         }
-        if (existingCommitment != nullResultCommitment) {
-            revert MarketsResultAlreadyRevealed(marketCommitment, existingCommitment);
-        }
+        require(
+            existingCommitment == nullResultCommitment,
+            MarketsResultAlreadyRevealed(marketCommitment, existingCommitment)
+        );
         // hook for implementation to verify that the result makes sense given all the bets
         _verifyResult(marketCommitment, marketBlob, resultCommitment, resultBlob);
 
@@ -137,22 +129,22 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         ResultCommitment existingCommitment = marketResults[marketCommitment];
-        if (existingCommitment != resultCommitment) {
-            revert MarketsInconsistentResult(marketCommitment, resultCommitment);
-        }
-        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
+        require(existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment));
 
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
         BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
         require(
             request.betCommitment == betCommitment,
             MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
         );
 
-        // TODO: think about re-entrancy
-        // TODO: think about repeated payouts for same bet
+        BetState storage betState = bets[requestCommitment];
+        require(betState.amount == request.amount, MarketsBetAlreadyRevealed(betCommitment));
+        // Since the bet is revealed, no amount should remain to be revealed
+        betState.amount = 0;
 
-        // TODO: look up bet by commitment
-
+        // TODO: make sure the bet has not been entered after reveal (store reveal block)
+        // TODO: set money aside for creator and operator fees
         (token, to, amount) = _getPayout(marketBlob, resultBlob, request, betBlob);
         if (amount > 0) {
             token.safeTransfer(to, amount);
@@ -185,4 +177,6 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
     ) internal view virtual;
+
+    // TODO: distribute operator fees batch call
 }

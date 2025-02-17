@@ -49,4 +49,6 @@ interface IMarkets {
         BetRequest calldata request,
         BetBlob calldata betBlob
     ) external returns (IERC20 token, address to, uint256 amount);
+
+    // TODO: add a batchRevealBets function
 }

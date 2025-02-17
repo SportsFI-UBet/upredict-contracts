@@ -15,4 +15,5 @@ interface MarketsErrors {
     );
 
     error MarketsInconsistentResult(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
+    error MarketsBetAlreadyRevealed(BetCommitment betCommitment);
 }
