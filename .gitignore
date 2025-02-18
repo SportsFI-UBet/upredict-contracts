@@ -21,6 +21,7 @@ deployments/31337
 node_modules/
 typechain/
 typescript/generated/
+/generated
 
 # Draw.io
 *.dtmp
