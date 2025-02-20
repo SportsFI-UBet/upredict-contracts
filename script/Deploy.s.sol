@@ -7,6 +7,7 @@ pragma solidity ^0.8.28;
 // import { console2 } from "forge-std/console2.sol";
 
 import { ParimutuelMarkets } from "../contracts/ParimutuelMarkets.sol";
+import { TestERC20 } from "../contracts/testnet/Token.sol";
 import { OpenZeppelinDeployments } from "./OpenZeppelinDeployments.s.sol";
 
 // environment variables for parameters to script
@@ -46,11 +47,24 @@ abstract contract DeployBase is OpenZeppelinDeployments {
 contract Deploy is DeployBase {
     ParimutuelMarkets public parimutuelMarkets;
 
-    function setUpContracts() internal override {
+    function setUpContracts() internal virtual override {
         {
             bytes memory constructorArgs = abi.encode(admin);
             address implementation = setUpContract("ParimutuelMarkets", constructorArgs, "", false);
             parimutuelMarkets = ParimutuelMarkets(implementation);
+        }
+    }
+}
+
+contract DeployTestnet is Deploy {
+    TestERC20 public token;
+
+    function setUpContracts() internal override {
+        Deploy.setUpContracts();
+
+        {
+            address implementation = setUpContract("TestERC20", "", "", false);
+            token = TestERC20(implementation);
         }
     }
 }
