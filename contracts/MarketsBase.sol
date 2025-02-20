@@ -10,6 +10,8 @@ import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol"
 import { MarketsErrors } from "./MarketsErrors.sol";
 import { IMarkets } from "./IMarkets.sol";
 import {
+    BetRequest,
+    RequestCommitment,
     MarketCommitment,
     ResultCommitment,
     BetCommitment,
@@ -43,7 +45,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     // TODO: If we store MarketHash, the marketId can still be hidden.
     // - Makes it easier to track bets for the same market, without knowing which exact market it is
     mapping(MarketCommitment => ResultCommitment) public marketResults;
-    mapping(BetCommitment => BetState) public bets;
+    mapping(RequestCommitment => BetState) public bets;
 
     /**
      * Increments every time a user places a bet
@@ -57,13 +59,16 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
-    function placeBet(BetRequest calldata bet, BetCommitment betCommitment) external {
-        // TODO: need signature from backend
+    function placeBet(BetRequest calldata bet, bytes calldata requestSignature) external {
         if (_msgSender() != bet.from) {
             revert MarketsWrongSender(_msgSender());
         }
 
-        bets[betCommitment] = BetState({ amount: bet.amount });
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
+        bets[requestCommitment] = BetState({ amount: bet.amount });
+
+        address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
+        _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
@@ -82,11 +87,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         //   Therefore need to store AccessControl permissions for addresses
         //   recovered through ecrecover. Can enable several signers to sign
 
-        _verifyRequest(bet, betCommitment);
+        _verifyRequest(bet, requestCommitment);
 
         bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
 
-        emit MarketsBetPlaced(bet, betCommitment);
+        emit MarketsBetPlaced(bet);
     }
 
     /**
@@ -123,44 +128,53 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
-    function revealBet(MarketBlob calldata marketBlob, ResultBlob calldata resultBlob, BetBlob calldata betBlob)
-        public
-        returns (IERC20 token, address to, uint256 amount)
-    {
+    function revealBet(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest calldata request,
+        BetBlob calldata betBlob
+    ) public returns (IERC20 token, address to, uint256 amount) {
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         ResultCommitment existingCommitment = marketResults[marketCommitment];
         if (existingCommitment != resultCommitment) {
             revert MarketsInconsistentResult(marketCommitment, resultCommitment);
         }
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
 
         BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
+        require(
+            request.betCommitment == betCommitment,
+            MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
+        );
+
         // TODO: think about re-entrancy
         // TODO: think about repeated payouts for same bet
 
         // TODO: look up bet by commitment
 
-        (token, to, amount) = _getPayout(marketBlob, resultBlob, betBlob);
+        (token, to, amount) = _getPayout(marketBlob, resultBlob, request, betBlob);
         if (amount > 0) {
             token.safeTransfer(to, amount);
         }
 
-        emit MarketsBetRevealed(betCommitment, marketCommitment, token, to, amount);
+        emit MarketsBetRevealed(requestCommitment, marketCommitment, token, to, amount);
     }
 
     /**
      * Hook to check that request is able to be fulfilled
      */
-    function _verifyRequest(IMarkets.BetRequest calldata request, BetCommitment betCommitment) internal view virtual;
+    function _verifyRequest(BetRequest calldata request, RequestCommitment requestCommitment) internal view virtual;
 
     /**
      * Hook to derive the payout from the bet blob
      */
-    function _getPayout(MarketBlob calldata marketBlob, ResultBlob calldata resultBlob, BetBlob calldata betBlob)
-        internal
-        view
-        virtual
-        returns (IERC20 token, address to, uint256 amount);
+    function _getPayout(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest calldata request,
+        BetBlob calldata betBlob
+    ) internal view virtual returns (IERC20 token, address to, uint256 amount);
 
     /**
      * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong)

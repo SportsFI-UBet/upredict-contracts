@@ -5,8 +5,16 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 import { UD60x18, ud60x18, unwrap } from "@prb/math/UD60x18.sol";
 
-import { IMarkets, MarketsBase } from "./MarketsBase.sol";
-import { BetCommitment, MarketCommitment, ResultCommitment, MarketBlob, ResultBlob, BetBlob } from "./Commitments.sol";
+import { MarketsBase } from "./MarketsBase.sol";
+import {
+    BetRequest,
+    RequestCommitment,
+    MarketCommitment,
+    ResultCommitment,
+    MarketBlob,
+    ResultBlob,
+    BetBlob
+} from "./Commitments.sol";
 
 contract ParimutuelMarkets is MarketsBase {
     struct MarketInfo {
@@ -39,15 +47,10 @@ contract ParimutuelMarkets is MarketsBase {
         uint256 salt;
     }
 
-    struct BetInfo {
-        BetRequest request;
-        BetHiddenInfo hidden;
-    }
-
     uint128 public betLowerLimit;
     uint128 public betUpperLimit;
 
-    error MarketsBetRequestOutsideLimits(BetCommitment betCommitment, uint256 amount);
+    error MarketsBetRequestOutsideLimits(RequestCommitment requestCommitment, uint256 amount);
 
     constructor(address admin) MarketsBase(admin) {
         betUpperLimit = type(uint128).max;
@@ -58,9 +61,9 @@ contract ParimutuelMarkets is MarketsBase {
         betUpperLimit = uint128(_betUpperLimit);
     }
 
-    function _verifyRequest(IMarkets.BetRequest calldata request, BetCommitment betCommitment) internal view override {
+    function _verifyRequest(BetRequest calldata request, RequestCommitment requestCommitment) internal view override {
         if (request.amount < betLowerLimit || request.amount > betUpperLimit) {
-            revert MarketsBetRequestOutsideLimits(betCommitment, request.amount);
+            revert MarketsBetRequestOutsideLimits(requestCommitment, request.amount);
         }
     }
 
@@ -81,22 +84,23 @@ contract ParimutuelMarkets is MarketsBase {
         }
     }
 
-    function _getPayout(MarketBlob calldata, ResultBlob calldata resultBlob, BetBlob calldata betBlob)
-        internal
-        pure
-        override
-        returns (IERC20 token, address to, uint256 amount)
-    {
-        BetInfo memory betInfo = abi.decode(betBlob.data, (BetInfo));
+    function _getPayout(
+        MarketBlob calldata,
+        ResultBlob calldata resultBlob,
+        BetRequest calldata request,
+        BetBlob calldata betBlob
+    ) internal pure override returns (IERC20 token, address to, uint256 amount) {
+        BetHiddenInfo memory hiddenInfo = abi.decode(betBlob.data, (BetHiddenInfo));
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
 
         // TODO: any more sanity checks?
 
-        token = betInfo.request.token;
-        to = betInfo.request.from;
-        if (betInfo.hidden.option == resultInfo.winningOption) {
+        // TODO: move token and to out?
+        token = request.token;
+        to = request.from;
+        if (hiddenInfo.option == resultInfo.winningOption) {
             // TODO: take care of fees
-            amount = betInfo.request.amount + unwrap(ud60x18(betInfo.request.amount) * resultInfo.normalization);
+            amount = request.amount + unwrap(ud60x18(request.amount) * resultInfo.normalization);
         }
     }
 }
