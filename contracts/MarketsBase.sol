@@ -58,13 +58,14 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
-    function placeBet(BetRequest calldata bet, bytes calldata requestSignature) external {
+    function placeBet(BetRequest calldata bet, bytes calldata /* requestSignature */ ) external {
         require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
 
-        address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
-        _checkRole(BET_SIGNATURE_ROLE, signerAddress);
+        // TODO: uncomment signature verification later. Excluding it for now for easier integration
+        // address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
+        // _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
