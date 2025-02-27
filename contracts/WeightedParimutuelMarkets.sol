@@ -15,8 +15,7 @@ import {
     BetBlob
 } from "./Commitments.sol";
 
-// TODO: rename to WeightedParimutuelMarkets
-contract ParimutuelMarkets is MarketsBase {
+contract WeightedParimutuelMarkets is MarketsBase {
     struct MarketInfo {
         address creator;
         /**
@@ -31,11 +30,17 @@ contract ParimutuelMarkets is MarketsBase {
     }
 
     struct ResultInfo {
-        /** The option that should get part of the losing pot */
+        /**
+         * The option that should get part of the losing pot
+         */
         uint256 winningOption;
-        /** Sum of all collateral staked for losing options */
+        /**
+         * Sum of all collateral staked for losing options
+         */
         uint256 losingTotalPot;
-        /** Sum of all bet weights for winning options */
+        /**
+         * Sum of all bet weights for winning options
+         */
         uint256 winningTotalWeight;
     }
 
@@ -89,9 +94,7 @@ contract ParimutuelMarkets is MarketsBase {
         );
         // TODO: how to ensure that no divide by zero, but also handle the case where there is no winner
         // In a prediction market, if no-one bets on the winning result, noone gets the money?
-        require(
-            resultInfo.winningTotalWeight > 0, MarketsInvalidResult(marketCommitment, resultCommitment)
-        );
+        require(resultInfo.winningTotalWeight > 0, MarketsInvalidResult(marketCommitment, resultCommitment));
     }
 
     function _getPayout(
@@ -110,7 +113,8 @@ contract ParimutuelMarkets is MarketsBase {
         to = request.from;
         if (hiddenInfo.option == resultInfo.winningOption) {
             // TODO: take care of fees
-            amount = request.amount + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
+            amount = request.amount
+                + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }
     }
 }

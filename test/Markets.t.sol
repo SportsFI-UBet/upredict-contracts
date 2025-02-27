@@ -24,7 +24,7 @@ import {
     ResultBlob,
     BetBlob
 } from "../contracts/Commitments.sol";
-import { MarketsBase, ParimutuelMarkets } from "../contracts/ParimutuelMarkets.sol";
+import { MarketsBase, WeightedParimutuelMarkets } from "../contracts/WeightedParimutuelMarkets.sol";
 
 /// @dev Adapted from guide on testing EIP712 signatures for foundry:
 /// https://book.getfoundry.sh/tutorials/testing-eip712?highlight=712#testing-eip-712-signatures
@@ -91,7 +91,7 @@ contract MockERC20 is ERC20 {
 
 contract MarketsTest is Test {
     MockERC20 public erc20;
-    ParimutuelMarkets public markets;
+    WeightedParimutuelMarkets public markets;
 
     address public admin;
     address public alice;
@@ -116,7 +116,7 @@ contract MarketsTest is Test {
         (betSigner, betSignerPrivateKey) = makeAddrAndKey("bet-signer");
 
         erc20 = new MockERC20();
-        markets = new ParimutuelMarkets(admin);
+        markets = new WeightedParimutuelMarkets(admin);
         submissionDeadlineBlock = block.number + 100;
         marketDeadlineBlock = block.number + 1000;
 
@@ -161,13 +161,13 @@ contract MarketsTest is Test {
     }
 
     struct MarketContext {
-        ParimutuelMarkets.MarketInfo marketInfo;
+        WeightedParimutuelMarkets.MarketInfo marketInfo;
         MarketBlob marketBlob;
         MarketCommitment marketCommitment;
     }
 
     function makeMarketContext() public view returns (MarketContext memory) {
-        ParimutuelMarkets.MarketInfo memory marketInfo = ParimutuelMarkets.MarketInfo({
+        WeightedParimutuelMarkets.MarketInfo memory marketInfo = WeightedParimutuelMarkets.MarketInfo({
             creator: creator,
             deadlineBlock: marketDeadlineBlock,
             marketId: 0x42,
@@ -180,7 +180,7 @@ contract MarketsTest is Test {
     }
 
     struct BetContext {
-        ParimutuelMarkets.BetHiddenInfo betInfo;
+        WeightedParimutuelMarkets.BetHiddenInfo betInfo;
         BetBlob betBlob;
         BetRequest request;
         RequestCommitment requestCommitment;
@@ -193,8 +193,12 @@ contract MarketsTest is Test {
         uint256 nonce,
         MarketCommitment marketCommitment
     ) public view returns (BetContext memory) {
-        ParimutuelMarkets.BetHiddenInfo memory betInfo =
-            ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: option, betWeight: amount, salt: 0x42 });
+        WeightedParimutuelMarkets.BetHiddenInfo memory betInfo = WeightedParimutuelMarkets.BetHiddenInfo({
+            marketCommitment: marketCommitment,
+            option: option,
+            betWeight: amount,
+            salt: 0x42
+        });
         BetBlob memory betBlob = BetBlob({ data: abi.encode(betInfo) });
         BetRequest memory request = BetRequest({
             token: erc20,
@@ -227,10 +231,10 @@ contract MarketsTest is Test {
         vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
 
         // Reveal market result
-        ParimutuelMarkets.ResultInfo memory resultInfo;
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
         {
             // Normalization is losing balances divided by winning pool balances
-            resultInfo = ParimutuelMarkets.ResultInfo({
+            resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOption: aliceBetContext.betInfo.option, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight
@@ -297,7 +301,9 @@ contract MarketsTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                ParimutuelMarkets.MarketsBetRequestOutsideLimits.selector, aliceBetContext.requestCommitment, amount
+                WeightedParimutuelMarkets.MarketsBetRequestOutsideLimits.selector,
+                aliceBetContext.requestCommitment,
+                amount
             )
         );
         vm.prank(alice);
@@ -309,7 +315,9 @@ contract MarketsTest is Test {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                ParimutuelMarkets.MarketsBetRequestOutsideLimits.selector, aliceBetContext.requestCommitment, amount
+                WeightedParimutuelMarkets.MarketsBetRequestOutsideLimits.selector,
+                aliceBetContext.requestCommitment,
+                amount
             )
         );
         vm.prank(alice);
