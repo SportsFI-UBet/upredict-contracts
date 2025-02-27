@@ -194,7 +194,7 @@ contract MarketsTest is Test {
         MarketCommitment marketCommitment
     ) public view returns (BetContext memory) {
         ParimutuelMarkets.BetHiddenInfo memory betInfo =
-            ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: option, salt: 0x42 });
+            ParimutuelMarkets.BetHiddenInfo({ marketCommitment: marketCommitment, option: option, betWeight: amount, salt: 0x42 });
         BetBlob memory betBlob = BetBlob({ data: abi.encode(betInfo) });
         BetRequest memory request = BetRequest({
             token: erc20,
@@ -230,10 +230,10 @@ contract MarketsTest is Test {
         ParimutuelMarkets.ResultInfo memory resultInfo;
         {
             // Normalization is losing balances divided by winning pool balances
-            UD60x18 normalization = ud60x18(uUNIT * bobBetContext.request.amount / aliceBetContext.request.amount);
             resultInfo = ParimutuelMarkets.ResultInfo({
                 winningOption: aliceBetContext.betInfo.option, // alice should win
-                normalization: normalization
+                losingTotalPot: bobBetContext.request.amount,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight
             });
         }
         ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
@@ -315,4 +315,8 @@ contract MarketsTest is Test {
         vm.prank(alice);
         markets.placeBet(aliceBetContext.request, signRequestCommitment(aliceBetContext.requestCommitment));
     }
+
+    // TODO: test place bet, reveal bet and then replay the place bet
+
+    // TODO: test exponential weighting
 }

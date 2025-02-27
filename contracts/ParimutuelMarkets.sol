@@ -2,8 +2,7 @@
 pragma solidity ^0.8.28;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
-import { UD60x18, ud60x18, unwrap } from "@prb/math/UD60x18.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { MarketsBase } from "./MarketsBase.sol";
 import {
@@ -16,6 +15,7 @@ import {
     BetBlob
 } from "./Commitments.sol";
 
+// TODO: rename to WeightedParimutuelMarkets
 contract ParimutuelMarkets is MarketsBase {
     struct MarketInfo {
         address creator;
@@ -31,16 +31,22 @@ contract ParimutuelMarkets is MarketsBase {
     }
 
     struct ResultInfo {
+        /** The option that should get part of the losing pot */
         uint256 winningOption;
-        /**
-         * multiplier of the amount to get the reward on top of the original amount
-         */
-        UD60x18 normalization;
+        /** Sum of all collateral staked for losing options */
+        uint256 losingTotalPot;
+        /** Sum of all bet weights for winning options */
+        uint256 winningTotalWeight;
     }
 
     struct BetHiddenInfo {
         MarketCommitment marketCommitment;
         uint256 option;
+        /**
+         * Custom weight assigned to this bet by the backend. To replicate
+         * Parimutuel betting, this weight would equal the bet amount.
+         */
+        uint256 betWeight;
         /**
          * random salt to ensure hash cannot be predicted
          */
@@ -81,6 +87,11 @@ contract ParimutuelMarkets is MarketsBase {
         require(
             resultInfo.winningOption < marketInfo.numOutcomes, MarketsInvalidResult(marketCommitment, resultCommitment)
         );
+        // TODO: how to ensure that no divide by zero, but also handle the case where there is no winner
+        // In a prediction market, if no-one bets on the winning result, noone gets the money?
+        require(
+            resultInfo.winningTotalWeight > 0, MarketsInvalidResult(marketCommitment, resultCommitment)
+        );
     }
 
     function _getPayout(
@@ -99,7 +110,7 @@ contract ParimutuelMarkets is MarketsBase {
         to = request.from;
         if (hiddenInfo.option == resultInfo.winningOption) {
             // TODO: take care of fees
-            amount = request.amount + unwrap(ud60x18(request.amount) * resultInfo.normalization);
+            amount = request.amount + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }
     }
 }
