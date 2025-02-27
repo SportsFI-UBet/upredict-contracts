@@ -1,9 +1,9 @@
 # Default "production" profile.
 # Reference build time 13s
 [profile.default]
-solc-version = "0.8.28"
+solc_version = "0.8.28"
 optimizer = true
-optimizer-runs = 10000
+optimizer_runs = 10000
 evm_version = "cancun"
 libs = ["lib"]
 src = "contracts"
@@ -11,6 +11,16 @@ out = "out"
 test = "test"
 broadcast = "broadcast"
 cache_path = "cache"
+auto_detect_remappings = false
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+    "@prb/math/=lib/prb-math/src/",
+    "ds-test/=lib/forge-std/lib/ds-test/src/",
+    "forge-std/=lib/forge-std/src/",
+    "upgrade-scripts/=lib/upgrade-scripts/src/",
+    "UDS/=lib/upgrade-scripts/lib/UDS/src/"
+]
 fs_permissions = [
     { access = "read", path = "out"},
     { access = "read-write", path = "deployments"}

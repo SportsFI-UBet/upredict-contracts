@@ -10,6 +10,8 @@ import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol"
 import { MarketsErrors } from "./MarketsErrors.sol";
 import { IMarkets } from "./IMarkets.sol";
 import {
+    BetRequest,
+    RequestCommitment,
     MarketCommitment,
     ResultCommitment,
     BetCommitment,
@@ -27,8 +29,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      * Stored on the blockchain to reference during reveal phase
      */
     struct BetState {
-        // TODO: not sure what is needed here beside the fact that "it exists"
-        uint256 amount;
+        uint96 amount;
     }
 
     /**
@@ -43,7 +44,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     // TODO: If we store MarketHash, the marketId can still be hidden.
     // - Makes it easier to track bets for the same market, without knowing which exact market it is
     mapping(MarketCommitment => ResultCommitment) public marketResults;
-    mapping(BetCommitment => BetState) public bets;
+    mapping(RequestCommitment => BetState) public bets;
 
     /**
      * Increments every time a user places a bet
@@ -57,36 +58,32 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
-    function placeBet(BetRequest calldata bet, BetCommitment betCommitment) external {
-        // TODO: need signature from backend
-        if (_msgSender() != bet.from) {
-            revert MarketsWrongSender(_msgSender());
-        }
+    function placeBet(BetRequest calldata bet, bytes calldata /* requestSignature */ ) external {
+        require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
 
-        bets[betCommitment] = BetState({ amount: bet.amount });
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
+
+        // TODO: uncomment signature verification later. Excluding it for now for easier integration
+        // address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
+        // _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
-        if (bet.nonce != expectedNonce) {
-            revert MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce);
-        }
-        userNonces[bet.from]++;
+        require(bet.nonce == expectedNonce, MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce));
 
-        // TODO: betCommitment must include the BetRequest as part of it - i.e. BetBlob includes BetRequest by default
+        _verifyRequest(bet, requestCommitment);
 
         // TODO: take care of fees
 
-        // TODO:
-        // Need to prevent bets to be entered past the market deadline without revealing the deadline or the market.
-        // - if we sign the blob with some specific private key and do ecrecover, we can make backend arbiter of bets.
-        //   Therefore need to store AccessControl permissions for addresses
-        //   recovered through ecrecover. Can enable several signers to sign
-
-        _verifyRequest(bet, betCommitment);
+        // It should not be possible to have bet with the same bet commitment entered already.
+        // The commitment includes the nonce, which prevents replay attacks.
+        assert(bets[requestCommitment].amount == 0);
+        bets[requestCommitment] = BetState({ amount: bet.amount });
+        userNonces[bet.from]++;
 
         bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
 
-        emit MarketsBetPlaced(bet, betCommitment);
+        emit MarketsBetPlaced(bet);
     }
 
     /**
@@ -109,9 +106,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         if (existingCommitment == resultCommitment) {
             return;
         }
-        if (existingCommitment != nullResultCommitment) {
-            revert MarketsResultAlreadyRevealed(marketCommitment, existingCommitment);
-        }
+        require(
+            existingCommitment == nullResultCommitment,
+            MarketsResultAlreadyRevealed(marketCommitment, existingCommitment)
+        );
         // hook for implementation to verify that the result makes sense given all the bets
         _verifyResult(marketCommitment, marketBlob, resultCommitment, resultBlob);
 
@@ -123,44 +121,53 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
-    function revealBet(MarketBlob calldata marketBlob, ResultBlob calldata resultBlob, BetBlob calldata betBlob)
-        public
-        returns (IERC20 token, address to, uint256 amount)
-    {
+    function revealBet(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest calldata request,
+        BetBlob calldata betBlob
+    ) public returns (IERC20 token, address to, uint256 amount) {
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         ResultCommitment existingCommitment = marketResults[marketCommitment];
-        if (existingCommitment != resultCommitment) {
-            revert MarketsInconsistentResult(marketCommitment, resultCommitment);
-        }
+        require(existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment));
 
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
         BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
-        // TODO: think about re-entrancy
-        // TODO: think about repeated payouts for same bet
+        require(
+            request.betCommitment == betCommitment,
+            MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
+        );
 
-        // TODO: look up bet by commitment
+        BetState storage betState = bets[requestCommitment];
+        require(betState.amount == request.amount, MarketsBetAlreadyRevealed(betCommitment));
+        // Since the bet is revealed, no amount should remain to be revealed
+        betState.amount = 0;
 
-        (token, to, amount) = _getPayout(marketBlob, resultBlob, betBlob);
+        // TODO: make sure the bet has not been entered after reveal (store reveal block)
+        // TODO: set money aside for creator and operator fees
+        (token, to, amount) = _getPayout(marketBlob, resultBlob, request, betBlob);
         if (amount > 0) {
             token.safeTransfer(to, amount);
         }
 
-        emit MarketsBetRevealed(betCommitment, marketCommitment, token, to, amount);
+        emit MarketsBetRevealed(requestCommitment, marketCommitment, token, to, amount);
     }
 
     /**
      * Hook to check that request is able to be fulfilled
      */
-    function _verifyRequest(IMarkets.BetRequest calldata request, BetCommitment betCommitment) internal view virtual;
+    function _verifyRequest(BetRequest calldata request, RequestCommitment requestCommitment) internal view virtual;
 
     /**
      * Hook to derive the payout from the bet blob
      */
-    function _getPayout(MarketBlob calldata marketBlob, ResultBlob calldata resultBlob, BetBlob calldata betBlob)
-        internal
-        view
-        virtual
-        returns (IERC20 token, address to, uint256 amount);
+    function _getPayout(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest calldata request,
+        BetBlob calldata betBlob
+    ) internal view virtual returns (IERC20 token, address to, uint256 amount);
 
     /**
      * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong)
@@ -171,4 +178,6 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
     ) internal view virtual;
+
+    // TODO: distribute operator fees batch call
 }
