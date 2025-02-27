@@ -33,6 +33,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     }
 
     /**
+     * Divisor used in fee calculations. Larger than can fit uint16, since fees are always less than 1
+     */
+    uint256 public constant FEE_DIVISOR = 10 ** 5;
+    /**
      * Addresses that are trusted to sign bet requests
      */
     bytes32 public constant BET_SIGNATURE_ROLE = keccak256("BET_SIGNATURE_ROLE");
@@ -40,11 +44,23 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      * Addresses that are trusted to sign market results
      */
     bytes32 public constant RESULT_SIGNATURE_ROLE = keccak256("RESULT_SIGNATURE_ROLE");
+    /**
+     * Addresses that are trusted to distribute operator fees
+     */
+    bytes32 public constant OPERATOR_FEE_DISTRIBUTOR_ROLE = keccak256("OPERATOR_FEE_DISTRIBUTOR_ROLE");
+    /**
+     * Internal address that collects operator fees
+     */
+    address private constant OPERATOR_FEE_ADDRESS = address(0x0);
 
-    // TODO: If we store MarketHash, the marketId can still be hidden.
-    // - Makes it easier to track bets for the same market, without knowing which exact market it is
     mapping(MarketCommitment => ResultCommitment) public marketResults;
     mapping(RequestCommitment => BetState) public bets;
+    /**
+     * All collected fees for a token and address
+     */
+    mapping(IERC20 => mapping(address => uint256)) public fees;
+    uint16 public creatorFeeDecimal;
+    uint16 public operatorFeeDecimal;
 
     /**
      * Increments every time a user places a bet
@@ -53,6 +69,12 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function setFees(uint16 _creatorFeeDecimal, uint16 _operatorFeeDecimal) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        creatorFeeDecimal = _creatorFeeDecimal;
+        operatorFeeDecimal = _operatorFeeDecimal;
+        // TODO: emit event?
     }
 
     /**
@@ -121,6 +143,67 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
+    function batchRevealBet(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest[] calldata requests,
+        BetBlob[] calldata betBlobs
+    ) external {
+        require(requests.length == betBlobs.length, MarketsBetInvalidBatchReveal());
+
+        for (uint256 i = 0; i < requests.length; i++) {
+            revealBet(marketBlob, resultBlob, requests[i], betBlobs[i]);
+        }
+    }
+
+    /**
+     * Withdraw any fees on behalf of a user
+     */
+    function withdrawFees(IERC20[] calldata tokens, address[] calldata users) external {
+        for (uint256 i = 0; i < tokens.length; i++) {
+            IERC20 token = tokens[i];
+            mapping(address => uint256) storage tokenFees = fees[token];
+
+            for (uint256 u = 0; u < users.length; u++) {
+                address user = users[u];
+                require(user != OPERATOR_FEE_ADDRESS, MarketsCannotWithdrawOperatorFees());
+                uint256 amount = tokenFees[user];
+                if (amount > 0) {
+                    tokenFees[user] = 0;
+                    token.safeTransfer(user, amount);
+                }
+            }
+        }
+    }
+
+    function distributeOperatorFees(FeeDistributionRequest[] calldata requests)
+        external
+        onlyRole(OPERATOR_FEE_DISTRIBUTOR_ROLE)
+    {
+        for (uint256 i = 0; i < requests.length; i++) {
+            FeeDistributionRequest calldata request = requests[i];
+            IERC20 token = request.token;
+            uint256 totalFeesAvailable = fees[token][OPERATOR_FEE_ADDRESS];
+            require(request.users.length == request.amounts.length, MarketsFeeDistributionRequestInvalid());
+
+            uint256 totalTaken = 0;
+            for (uint256 u = 0; u < request.users.length; u++) {
+                address user = request.users[u];
+                uint256 amount = request.amounts[u];
+                totalTaken += amount;
+                token.safeTransfer(user, amount);
+            }
+
+            require(
+                totalTaken <= totalFeesAvailable, MarketsNotEnoughOperatorFees(token, totalFeesAvailable, totalTaken)
+            );
+            fees[token][OPERATOR_FEE_ADDRESS] = totalFeesAvailable - totalTaken;
+        }
+    }
+
+    /**
+     * @inheritdoc IMarkets
+     */
     function revealBet(
         MarketBlob calldata marketBlob,
         ResultBlob calldata resultBlob,
@@ -145,9 +228,22 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         betState.amount = 0;
 
         // TODO: make sure the bet has not been entered after reveal (store reveal block)
-        // TODO: set money aside for creator and operator fees
-        (token, to, amount) = _getPayout(marketBlob, resultBlob, request, betBlob);
+        token = request.token;
+        to = request.from;
+        address creator;
+        (amount, creator) = _getPayout(marketBlob, resultBlob, request, betBlob);
         if (amount > 0) {
+            // fee can be taken out here as percentage of amount. If we assume
+            // fees are taken as a percentage of every bet, then taking the same
+            // percentage of every bettor's winnings is the same as doing it on the
+            // whole pool.
+            uint256 creatorFee = (creatorFeeDecimal * amount) / FEE_DIVISOR;
+            uint256 operatorFee = (operatorFeeDecimal * amount) / FEE_DIVISOR;
+            fees[token][creator] += creatorFee;
+            fees[token][OPERATOR_FEE_ADDRESS] += operatorFee;
+            emit MarketsBetFeeCollected(marketCommitment, token, creator, creatorFee, operatorFee);
+            amount -= (creatorFee + operatorFee);
+
             token.safeTransfer(to, amount);
         }
 
@@ -167,7 +263,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultBlob calldata resultBlob,
         BetRequest calldata request,
         BetBlob calldata betBlob
-    ) internal view virtual returns (IERC20 token, address to, uint256 amount);
+    ) internal view virtual returns (uint256 amount, address creator);
 
     /**
      * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong)
@@ -178,6 +274,4 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
     ) internal view virtual;
-
-    // TODO: distribute operator fees batch call
 }

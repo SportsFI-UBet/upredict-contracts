@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
 import { RequestCommitment, BetCommitment, MarketCommitment, ResultCommitment } from "./Commitments.sol";
 
 interface MarketsErrors {
@@ -16,4 +18,12 @@ interface MarketsErrors {
 
     error MarketsInconsistentResult(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
     error MarketsBetAlreadyRevealed(BetCommitment betCommitment);
+    error MarketsBetInvalidBatchReveal();
+
+    /**
+     * Operator trying to remove more fees than available
+     */
+    error MarketsNotEnoughOperatorFees(IERC20 token, uint256 available, uint256 requested);
+    error MarketsCannotWithdrawOperatorFees();
+    error MarketsFeeDistributionRequestInvalid();
 }

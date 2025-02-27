@@ -96,11 +96,13 @@ contract MarketsTest is Test {
     address public admin;
     address public alice;
     address public bob;
+    address public carol;
     address public creator;
     address public betSigner;
     uint256 public betSignerPrivateKey;
     address public resultSigner;
     uint256 public resultSignerPrivateKey;
+    address public operatorFeeDistributor;
 
     uint256 public marketDeadlineBlock;
     uint256 public submissionDeadlineBlock;
@@ -110,10 +112,12 @@ contract MarketsTest is Test {
     function setUp() public {
         alice = makeAddr("alice");
         bob = makeAddr("bob");
+        carol = makeAddr("carol");
         creator = makeAddr("creator");
         admin = makeAddr("admin");
         (resultSigner, resultSignerPrivateKey) = makeAddrAndKey("result-signer");
         (betSigner, betSignerPrivateKey) = makeAddrAndKey("bet-signer");
+        operatorFeeDistributor = makeAddr("operator-fee-distributor");
 
         erc20 = new MockERC20();
         markets = new WeightedParimutuelMarkets(admin);
@@ -128,6 +132,10 @@ contract MarketsTest is Test {
         role = markets.BET_SIGNATURE_ROLE();
         vm.prank(admin);
         markets.grantRole(role, betSigner);
+
+        role = markets.OPERATOR_FEE_DISTRIBUTOR_ROLE();
+        vm.prank(admin);
+        markets.grantRole(role, operatorFeeDistributor);
     }
 
     function signCommitment(uint256 privateKey, bytes32 commitment) public pure returns (bytes memory sig) {
@@ -191,12 +199,13 @@ contract MarketsTest is Test {
         uint256 amount,
         uint256 option,
         uint256 nonce,
-        MarketCommitment marketCommitment
+        MarketCommitment marketCommitment,
+        uint256 weight
     ) public view returns (BetContext memory) {
         WeightedParimutuelMarkets.BetHiddenInfo memory betInfo = WeightedParimutuelMarkets.BetHiddenInfo({
             marketCommitment: marketCommitment,
             option: option,
-            betWeight: amount,
+            betWeight: weight,
             salt: 0x42
         });
         BetBlob memory betBlob = BetBlob({ data: abi.encode(betInfo) });
@@ -212,6 +221,16 @@ contract MarketsTest is Test {
 
         return
             BetContext({ betInfo: betInfo, betBlob: betBlob, request: request, requestCommitment: requestCommitment });
+    }
+
+    function makeBetContext(
+        address user,
+        uint256 amount,
+        uint256 option,
+        uint256 nonce,
+        MarketCommitment marketCommitment
+    ) public view returns (BetContext memory) {
+        return makeBetContext(user, amount, option, nonce, marketCommitment, amount);
     }
 
     function testEndToEnd() public {
@@ -233,7 +252,6 @@ contract MarketsTest is Test {
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo;
         {
-            // Normalization is losing balances divided by winning pool balances
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOption: aliceBetContext.betInfo.option, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
@@ -326,5 +344,162 @@ contract MarketsTest is Test {
 
     // TODO: test place bet, reveal bet and then replay the place bet
 
-    // TODO: test exponential weighting
+    function testEndToEndWeighted() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet, give her weight of 3
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment, 3);
+
+        // Approve erc20 and make bet
+        placeBet(alice, aliceBetContext.request);
+        vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
+
+        // Bob bets, weight of 2
+        BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment, 2);
+
+        placeBet(bob, bobBetContext.request);
+        vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
+
+        // Carol bets, weight of 1
+        BetContext memory carolBetContext = makeBetContext(carol, 10e18, 1, 0, marketContext.marketCommitment, 1);
+        placeBet(carol, carolBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
+        {
+            resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOption: aliceBetContext.betInfo.option, // alice and carol should win
+                losingTotalPot: bobBetContext.request.amount,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight + carolBetContext.betInfo.betWeight
+            });
+        }
+        ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
+        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
+
+        bytes memory resultSignature = signResultCommitment(resultCommitment);
+        vm.expectEmit(true, false, false, true);
+        emit IMarkets.MarketsResultRevealed(marketContext.marketCommitment, resultCommitment);
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+
+        // Reveal each bet. Alice should get back 3/4 of whole pot
+        uint256 totalBetAmount =
+            bobBetContext.request.amount + aliceBetContext.request.amount + carolBetContext.request.amount;
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount, "All money is in pool");
+
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(bobBetContext.requestCommitment, marketContext.marketCommitment, erc20, bob, 0);
+        markets.revealBet(marketContext.marketBlob, resultBlob, bobBetContext.request, bobBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount);
+        vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
+
+        uint256 aliceWinnings = aliceBetContext.request.amount + bobBetContext.request.amount * 3 / 4;
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, alice, aliceWinnings
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount - aliceWinnings, "Alice claimed her winnings");
+        vm.assertEq(erc20.balanceOf(address(alice)), aliceWinnings, "Alice received her winnings");
+
+        uint256 carolWinnings = carolBetContext.request.amount + bobBetContext.request.amount / 4;
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            carolBetContext.requestCommitment, marketContext.marketCommitment, erc20, carol, carolWinnings
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, carolBetContext.request, carolBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), 0, "Carol claimed her winnings");
+        vm.assertEq(erc20.balanceOf(address(carol)), carolWinnings, "Carol received her winnings");
+    }
+
+    // TODO: test abandoning a bet and trying to reveal
+
+    function testFees(uint256 creatorFeesDecimal, uint256 operatorFeesDecimal) public {
+        creatorFeesDecimal = bound(creatorFeesDecimal, 0, 3e3);
+        operatorFeesDecimal = bound(operatorFeesDecimal, 0, 3e3);
+
+        vm.prank(admin);
+        markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
+
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Alice and bob bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
+        {
+            resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOption: aliceBetContext.betInfo.option, // alice should win
+                losingTotalPot: bobBetContext.request.amount,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight
+            });
+        }
+        ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
+        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
+
+        bytes memory resultSignature = signResultCommitment(resultCommitment);
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+
+        // Reveal each bet. Alice should get back the whole pot, fees should come out of that
+        uint256 totalBetAmount = bobBetContext.request.amount + aliceBetContext.request.amount;
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount, "All money is in pool");
+        vm.assertEq(markets.fees(erc20, address(0x0)), 0, "No operator fees yet");
+        vm.assertEq(markets.fees(erc20, address(creator)), 0, "No creator fees yet");
+
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(bobBetContext.requestCommitment, marketContext.marketCommitment, erc20, bob, 0);
+        markets.revealBet(marketContext.marketBlob, resultBlob, bobBetContext.request, bobBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount);
+        vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
+
+        // Alice revealing will transfer fees
+        uint256 creatorFee = creatorFeesDecimal * totalBetAmount / markets.FEE_DIVISOR();
+        uint256 operatorFee = operatorFeesDecimal * totalBetAmount / markets.FEE_DIVISOR();
+        uint256 aliceAmount = totalBetAmount - creatorFee - operatorFee;
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetFeeCollected(marketContext.marketCommitment, erc20, creator, creatorFee, operatorFee);
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, alice, aliceAmount
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), creatorFee + operatorFee, "Only fees remain");
+        vm.assertEq(erc20.balanceOf(address(alice)), aliceAmount, "Alice received her winnings");
+        vm.assertEq(markets.fees(erc20, address(0x0)), operatorFee, "Operator fee");
+        vm.assertEq(markets.fees(erc20, address(creator)), creatorFee, "Creator fee");
+
+        // withdraw creator fee
+        {
+            IERC20[] memory tokens = new IERC20[](1);
+            tokens[0] = erc20;
+            address[] memory users = new address[](1);
+            users[0] = creator;
+            markets.withdrawFees(tokens, users);
+            vm.assertEq(erc20.balanceOf(address(creator)), creatorFee, "Creator got their fee");
+        }
+
+        // distribute operator fee to bob and carol
+        {
+            IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
+            requests[0] =
+                IMarkets.FeeDistributionRequest({ token: erc20, users: new address[](2), amounts: new uint256[](2) });
+            requests[0].users[0] = bob;
+            requests[0].amounts[0] = operatorFee / 3;
+
+            requests[0].users[1] = carol;
+            requests[0].amounts[1] = operatorFee - requests[0].amounts[0];
+
+            vm.prank(operatorFeeDistributor);
+            markets.distributeOperatorFees(requests);
+
+            vm.assertEq(erc20.balanceOf(address(bob)), requests[0].amounts[0], "Bob operator fee");
+            vm.assertEq(erc20.balanceOf(address(carol)), requests[0].amounts[1], "Carol operator fee");
+        }
+
+        vm.assertEq(erc20.balanceOf(address(markets)), 0, "All collateral distributed");
+    }
 }

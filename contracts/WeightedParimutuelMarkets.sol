@@ -17,6 +17,9 @@ import {
 
 contract WeightedParimutuelMarkets is MarketsBase {
     struct MarketInfo {
+        /**
+         * Account that created this market
+         */
         address creator;
         /**
          * When a market is considered done
@@ -98,21 +101,18 @@ contract WeightedParimutuelMarkets is MarketsBase {
     }
 
     function _getPayout(
-        MarketBlob calldata,
+        MarketBlob calldata marketBlob,
         ResultBlob calldata resultBlob,
         BetRequest calldata request,
         BetBlob calldata betBlob
-    ) internal pure override returns (IERC20 token, address to, uint256 amount) {
+    ) internal pure override returns (uint256 amount, address creator) {
         BetHiddenInfo memory hiddenInfo = abi.decode(betBlob.data, (BetHiddenInfo));
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
 
         // TODO: any more sanity checks?
 
-        // TODO: move token and to out?
-        token = request.token;
-        to = request.from;
+        creator = abi.decode(marketBlob.data, (MarketInfo)).creator;
         if (hiddenInfo.option == resultInfo.winningOption) {
-            // TODO: take care of fees
             amount = request.amount
                 + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }
