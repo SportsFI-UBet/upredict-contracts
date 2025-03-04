@@ -48,17 +48,14 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      * Addresses that are trusted to distribute operator fees
      */
     bytes32 public constant OPERATOR_FEE_DISTRIBUTOR_ROLE = keccak256("OPERATOR_FEE_DISTRIBUTOR_ROLE");
-    /**
-     * Internal address that collects operator fees
-     */
-    address private constant OPERATOR_FEE_ADDRESS = address(0x0);
 
     mapping(MarketCommitment => ResultCommitment) public marketResults;
     mapping(RequestCommitment => BetState) public bets;
     /**
      * All collected fees for a token and address
      */
-    mapping(IERC20 => mapping(address => uint256)) public fees;
+    mapping(IERC20 => mapping(address => uint256)) public creatorFees;
+    mapping(IERC20 => uint256) public operatorFees;
     uint16 public creatorFeeDecimal;
     uint16 public operatorFeeDecimal;
 
@@ -94,8 +91,6 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         require(bet.nonce == expectedNonce, MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce));
 
         _verifyRequest(bet, requestCommitment);
-
-        // TODO: take care of fees
 
         // It should not be possible to have bet with the same bet commitment entered already.
         // The commitment includes the nonce, which prevents replay attacks.
@@ -159,14 +154,13 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * Withdraw any fees on behalf of a user
      */
-    function withdrawFees(IERC20[] calldata tokens, address[] calldata users) external {
+    function withdrawCreatorFees(IERC20[] calldata tokens, address[] calldata users) external {
         for (uint256 i = 0; i < tokens.length; i++) {
             IERC20 token = tokens[i];
-            mapping(address => uint256) storage tokenFees = fees[token];
+            mapping(address => uint256) storage tokenFees = creatorFees[token];
 
             for (uint256 u = 0; u < users.length; u++) {
                 address user = users[u];
-                require(user != OPERATOR_FEE_ADDRESS, MarketsCannotWithdrawOperatorFees());
                 uint256 amount = tokenFees[user];
                 if (amount > 0) {
                     tokenFees[user] = 0;
@@ -183,7 +177,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         for (uint256 i = 0; i < requests.length; i++) {
             FeeDistributionRequest calldata request = requests[i];
             IERC20 token = request.token;
-            uint256 totalFeesAvailable = fees[token][OPERATOR_FEE_ADDRESS];
+            uint256 totalFeesAvailable = operatorFees[token];
             require(request.users.length == request.amounts.length, MarketsFeeDistributionRequestInvalid());
 
             uint256 totalTaken = 0;
@@ -197,7 +191,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             require(
                 totalTaken <= totalFeesAvailable, MarketsNotEnoughOperatorFees(token, totalFeesAvailable, totalTaken)
             );
-            fees[token][OPERATOR_FEE_ADDRESS] = totalFeesAvailable - totalTaken;
+            // TODO: prevent re-entrancy attack where distribute is called
+            // recursively twice for half the amount. The side effect below will
+            // "reset" the available fees like only half was withdrawn
+            operatorFees[token] = totalFeesAvailable - totalTaken;
         }
     }
 
@@ -239,8 +236,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             // whole pool.
             uint256 creatorFee = (creatorFeeDecimal * amount) / FEE_DIVISOR;
             uint256 operatorFee = (operatorFeeDecimal * amount) / FEE_DIVISOR;
-            fees[token][creator] += creatorFee;
-            fees[token][OPERATOR_FEE_ADDRESS] += operatorFee;
+            creatorFees[token][creator] += creatorFee;
+            operatorFees[token] += operatorFee;
             emit MarketsBetFeeCollected(marketCommitment, token, creator, creatorFee, operatorFee);
             amount -= (creatorFee + operatorFee);
 

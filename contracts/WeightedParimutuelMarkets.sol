@@ -42,7 +42,7 @@ contract WeightedParimutuelMarkets is MarketsBase {
          */
         uint256 losingTotalPot;
         /**
-         * Sum of all bet weights for winning options
+         * Sum of all bet weights for bets with the winning option
          */
         uint256 winningTotalWeight;
     }

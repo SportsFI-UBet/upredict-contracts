@@ -5,13 +5,10 @@ pragma solidity ^0.8.28;
 
 import { Test } from "forge-std/Test.sol";
 
-import { IERC20Errors, IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import { ERC20Permit } from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import { IERC165, ERC165 } from "@openzeppelin/contracts/utils/introspection/ERC165.sol";
+import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
 import { ERC2771Forwarder } from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
-import { UD60x18, ud60x18, unwrap, uUNIT, UNIT } from "@prb/math/UD60x18.sol";
 
 import { IMarkets } from "../contracts/IMarkets.sol";
 import {
@@ -24,7 +21,7 @@ import {
     ResultBlob,
     BetBlob
 } from "../contracts/Commitments.sol";
-import { MarketsBase, WeightedParimutuelMarkets } from "../contracts/WeightedParimutuelMarkets.sol";
+import { WeightedParimutuelMarkets } from "../contracts/WeightedParimutuelMarkets.sol";
 
 /// @dev Adapted from guide on testing EIP712 signatures for foundry:
 /// https://book.getfoundry.sh/tutorials/testing-eip712?highlight=712#testing-eip-712-signatures
@@ -447,8 +444,8 @@ contract MarketsTest is Test {
         // Reveal each bet. Alice should get back the whole pot, fees should come out of that
         uint256 totalBetAmount = bobBetContext.request.amount + aliceBetContext.request.amount;
         vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount, "All money is in pool");
-        vm.assertEq(markets.fees(erc20, address(0x0)), 0, "No operator fees yet");
-        vm.assertEq(markets.fees(erc20, address(creator)), 0, "No creator fees yet");
+        vm.assertEq(markets.operatorFees(erc20), 0, "No operator fees yet");
+        vm.assertEq(markets.creatorFees(erc20, address(creator)), 0, "No creator fees yet");
 
         vm.expectEmit(true, true, true, true);
         emit IMarkets.MarketsBetRevealed(bobBetContext.requestCommitment, marketContext.marketCommitment, erc20, bob, 0);
@@ -469,8 +466,8 @@ contract MarketsTest is Test {
         markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
         vm.assertEq(erc20.balanceOf(address(markets)), creatorFee + operatorFee, "Only fees remain");
         vm.assertEq(erc20.balanceOf(address(alice)), aliceAmount, "Alice received her winnings");
-        vm.assertEq(markets.fees(erc20, address(0x0)), operatorFee, "Operator fee");
-        vm.assertEq(markets.fees(erc20, address(creator)), creatorFee, "Creator fee");
+        vm.assertEq(markets.operatorFees(erc20), operatorFee, "Operator fee");
+        vm.assertEq(markets.creatorFees(erc20, address(creator)), creatorFee, "Creator fee");
 
         // withdraw creator fee
         {
@@ -478,7 +475,7 @@ contract MarketsTest is Test {
             tokens[0] = erc20;
             address[] memory users = new address[](1);
             users[0] = creator;
-            markets.withdrawFees(tokens, users);
+            markets.withdrawCreatorFees(tokens, users);
             vm.assertEq(erc20.balanceOf(address(creator)), creatorFee, "Creator got their fee");
         }
 

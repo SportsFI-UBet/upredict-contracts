@@ -76,7 +76,7 @@ interface IMarkets {
         BetBlob[] calldata betBlobs
     ) external;
 
-    function withdrawFees(IERC20[] calldata tokens, address[] calldata users) external;
+    function withdrawCreatorFees(IERC20[] calldata tokens, address[] calldata users) external;
 
     function distributeOperatorFees(FeeDistributionRequest[] calldata requests) external;
 }
