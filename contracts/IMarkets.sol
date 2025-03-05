@@ -14,6 +14,15 @@ import {
 } from "./Commitments.sol";
 
 interface IMarkets {
+    /**
+     * A batch distribution request to distribute operator fees as they see fit
+     */
+    struct FeeDistributionRequest {
+        IERC20 token;
+        address[] users;
+        uint256[] amounts;
+    }
+
     event MarketsBetPlaced(BetRequest request);
     event MarketsResultRevealed(MarketCommitment indexed marketCommitment, ResultCommitment resultCommitment);
     event MarketsBetRevealed(
@@ -22,6 +31,13 @@ interface IMarkets {
         IERC20 indexed token,
         address indexed user,
         uint256 payout
+    );
+    event MarketsBetFeeCollected(
+        MarketCommitment indexed marketCommitment,
+        IERC20 indexed token,
+        address indexed creator,
+        uint256 creatorFee,
+        uint256 operatorFee
     );
 
     /**
@@ -50,5 +66,17 @@ interface IMarkets {
         BetBlob calldata betBlob
     ) external returns (IERC20 token, address to, uint256 amount);
 
-    // TODO: add a batchRevealBets function
+    /**
+     * Reveal multiple bets for a particular market
+     */
+    function batchRevealBet(
+        MarketBlob calldata marketBlob,
+        ResultBlob calldata resultBlob,
+        BetRequest[] calldata requests,
+        BetBlob[] calldata betBlobs
+    ) external;
+
+    function withdrawCreatorFees(IERC20[] calldata tokens, address[] calldata users) external;
+
+    function distributeOperatorFees(FeeDistributionRequest[] calldata requests) external;
 }
