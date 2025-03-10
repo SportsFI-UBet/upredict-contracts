@@ -45,6 +45,10 @@ contract WeightedParimutuelMarkets is MarketsBase {
          * Sum of all bet weights for bets with the winning outcome
          */
         uint256 winningTotalWeight;
+        /**
+         * The market for which this result applies to
+         */
+        MarketCommitment marketCommitment;
     }
 
     struct BetHiddenInfo {
@@ -116,5 +120,15 @@ contract WeightedParimutuelMarkets is MarketsBase {
             amount = request.amount
                 + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }
+    }
+
+    function _getMarketFromResult(ResultBlob calldata resultBlob) internal pure override returns (MarketCommitment) {
+        ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
+        return resultInfo.marketCommitment;
+    }
+
+    function _getMarketFromBet(BetBlob calldata betBlob) internal pure override returns (MarketCommitment) {
+        BetHiddenInfo memory betInfo = abi.decode(betBlob.data, (BetHiddenInfo));
+        return betInfo.marketCommitment;
     }
 }

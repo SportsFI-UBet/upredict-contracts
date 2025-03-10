@@ -109,10 +109,9 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     function revealMarketResult(
         MarketBlob calldata marketBlob,
         ResultBlob calldata resultBlob,
-        bytes calldata resultSignature // TODO: this signature should encompass both market and result blobs
+        bytes calldata resultSignature
     ) external {
         // Should this be an EIP-712 signature?
-        // TODO: avoid replay attack if first time rejected
 
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
@@ -126,6 +125,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         require(
             existingCommitment == nullResultCommitment,
             MarketsResultAlreadyRevealed(marketCommitment, existingCommitment)
+        );
+        // Make sure result blob depends on market
+        require(
+            marketCommitment == _getMarketFromResult(resultBlob),
+            MarketsInvalidResult(marketCommitment, resultCommitment)
         );
         // hook for implementation to verify that the result makes sense given all the bets
         _verifyResult(marketCommitment, marketBlob, resultCommitment, resultBlob);
@@ -211,6 +215,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         ResultCommitment existingCommitment = marketResults[marketCommitment];
         require(existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment));
+        require(marketCommitment == _getMarketFromBet(betBlob), MarketsBetInvalidBatchReveal());
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
         BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
@@ -225,6 +230,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         betState.amount = 0;
 
         // TODO: make sure the bet has not been entered after reveal (store reveal block)
+        // TODO: get marketCommitment out of betBlob
         token = request.token;
         to = request.from;
         address creator;
@@ -271,4 +277,24 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
     ) internal view virtual;
+
+    /**
+     * Hook to extract a marketCommitment from a result. Used to enforce that
+     * the result blob is dependent on the market blob
+     */
+    function _getMarketFromResult(ResultBlob calldata resultBlob)
+        internal
+        pure
+        virtual
+        returns (MarketCommitment marketCommitment);
+
+    /**
+     * Hook to extract a marketCommitment from a bet blob. Used to enforce that
+     * the bet blob is dependent on the market blob
+     */
+    function _getMarketFromBet(BetBlob calldata betBlob)
+        internal
+        pure
+        virtual
+        returns (MarketCommitment marketCommitment);
 }

@@ -252,7 +252,8 @@ contract MarketsTest is Test {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
-                winningTotalWeight: aliceBetContext.betInfo.betWeight
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
             });
         }
         ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
@@ -367,7 +368,8 @@ contract MarketsTest is Test {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice and carol should win
                 losingTotalPot: bobBetContext.request.amount,
-                winningTotalWeight: aliceBetContext.betInfo.betWeight + carolBetContext.betInfo.betWeight
+                winningTotalWeight: aliceBetContext.betInfo.betWeight + carolBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
             });
         }
         ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
@@ -432,7 +434,8 @@ contract MarketsTest is Test {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
-                winningTotalWeight: aliceBetContext.betInfo.betWeight
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
             });
         }
         ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
