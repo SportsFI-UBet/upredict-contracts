@@ -34,22 +34,22 @@ contract WeightedParimutuelMarkets is MarketsBase {
 
     struct ResultInfo {
         /**
-         * The option that should get part of the losing pot
+         * The outcome that should get part of the losing pot
          */
-        uint256 winningOption;
+        uint256 winningOutcome;
         /**
-         * Sum of all collateral staked for losing options
+         * Sum of all collateral staked for losing outcome
          */
         uint256 losingTotalPot;
         /**
-         * Sum of all bet weights for bets with the winning option
+         * Sum of all bet weights for bets with the winning outcome
          */
         uint256 winningTotalWeight;
     }
 
     struct BetHiddenInfo {
         MarketCommitment marketCommitment;
-        uint256 option;
+        uint256 outcome;
         /**
          * Custom weight assigned to this bet by the backend. To replicate
          * Parimutuel betting, this weight would equal the bet amount.
@@ -93,7 +93,7 @@ contract WeightedParimutuelMarkets is MarketsBase {
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
         require(
-            resultInfo.winningOption < marketInfo.numOutcomes, MarketsInvalidResult(marketCommitment, resultCommitment)
+            resultInfo.winningOutcome < marketInfo.numOutcomes, MarketsInvalidResult(marketCommitment, resultCommitment)
         );
         // TODO: how to ensure that no divide by zero, but also handle the case where there is no winner
         // In a prediction market, if no-one bets on the winning result, noone gets the money?
@@ -112,7 +112,7 @@ contract WeightedParimutuelMarkets is MarketsBase {
         // TODO: any more sanity checks?
 
         creator = abi.decode(marketBlob.data, (MarketInfo)).creator;
-        if (hiddenInfo.option == resultInfo.winningOption) {
+        if (hiddenInfo.outcome == resultInfo.winningOutcome) {
             amount = request.amount
                 + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }

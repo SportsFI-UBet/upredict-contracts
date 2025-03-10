@@ -194,14 +194,14 @@ contract MarketsTest is Test {
     function makeBetContext(
         address user,
         uint256 amount,
-        uint256 option,
+        uint256 outcome,
         uint256 nonce,
         MarketCommitment marketCommitment,
         uint256 weight
     ) public view returns (BetContext memory) {
         WeightedParimutuelMarkets.BetHiddenInfo memory betInfo = WeightedParimutuelMarkets.BetHiddenInfo({
             marketCommitment: marketCommitment,
-            option: option,
+            outcome: outcome,
             betWeight: weight,
             salt: 0x42
         });
@@ -223,11 +223,11 @@ contract MarketsTest is Test {
     function makeBetContext(
         address user,
         uint256 amount,
-        uint256 option,
+        uint256 outcome,
         uint256 nonce,
         MarketCommitment marketCommitment
     ) public view returns (BetContext memory) {
-        return makeBetContext(user, amount, option, nonce, marketCommitment, amount);
+        return makeBetContext(user, amount, outcome, nonce, marketCommitment, amount);
     }
 
     function testEndToEnd() public {
@@ -250,7 +250,7 @@ contract MarketsTest is Test {
         WeightedParimutuelMarkets.ResultInfo memory resultInfo;
         {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
-                winningOption: aliceBetContext.betInfo.option, // alice should win
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight
             });
@@ -365,7 +365,7 @@ contract MarketsTest is Test {
         WeightedParimutuelMarkets.ResultInfo memory resultInfo;
         {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
-                winningOption: aliceBetContext.betInfo.option, // alice and carol should win
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice and carol should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight + carolBetContext.betInfo.betWeight
             });
@@ -430,7 +430,7 @@ contract MarketsTest is Test {
         WeightedParimutuelMarkets.ResultInfo memory resultInfo;
         {
             resultInfo = WeightedParimutuelMarkets.ResultInfo({
-                winningOption: aliceBetContext.betInfo.option, // alice should win
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight
             });
