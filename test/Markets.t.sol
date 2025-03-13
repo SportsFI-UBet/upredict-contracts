@@ -10,7 +10,9 @@ import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.so
 import { ERC2771Forwarder } from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
+import { DeployTestnet } from "../script/Deploy.s.sol";
 import { IMarkets } from "../contracts/IMarkets.sol";
+import { MarketsErrors } from "../contracts/MarketsErrors.sol";
 import {
     BetRequest,
     RequestCommitment,
@@ -78,18 +80,7 @@ contract SigUtils {
     }
 }
 
-contract MockERC20 is ERC20 {
-    constructor() ERC20("TEST", "TEST") { }
-
-    function mint(address account, uint256 value) external {
-        return _mint(account, value);
-    }
-}
-
-contract MarketsTest is Test {
-    MockERC20 public erc20;
-    WeightedParimutuelMarkets public markets;
-
+contract MarketsTest is Test, DeployTestnet {
     address public admin;
     address public alice;
     address public bob;
@@ -106,7 +97,13 @@ contract MarketsTest is Test {
 
     using MessageHashUtils for bytes32;
 
+    function setUpUpgradeScripts() internal override {
+        // Ignore any deploy-latest files for anvil
+        UPGRADE_SCRIPTS_BYPASS = true;
+    }
+
     function setUp() public {
+        admin = makeAddr("admin");
         alice = makeAddr("alice");
         bob = makeAddr("bob");
         carol = makeAddr("carol");
@@ -116,8 +113,8 @@ contract MarketsTest is Test {
         (betSigner, betSignerPrivateKey) = makeAddrAndKey("bet-signer");
         operatorFeeDistributor = makeAddr("operator-fee-distributor");
 
-        erc20 = new MockERC20();
-        markets = new WeightedParimutuelMarkets(admin);
+        DeployTestnet.setUpContracts(admin);
+
         submissionDeadlineBlock = block.number + 100;
         marketDeadlineBlock = block.number + 1000;
 
@@ -152,12 +149,16 @@ contract MarketsTest is Test {
         return signRequestCommitment(RequestCommitment.wrap(keccak256(abi.encode(request))));
     }
 
-    function placeBet(address user, BetRequest memory request) public {
+    function preparePlaceBet(address user, BetRequest memory request) public returns (bytes memory signature) {
         erc20.mint(user, request.amount);
         vm.prank(user);
         erc20.approve(address(markets), request.amount);
 
-        bytes memory signature = signRequest(request);
+        signature = signRequest(request);
+    }
+
+    function placeBet(address user, BetRequest memory request) public {
+        bytes memory signature = preparePlaceBet(user, request);
 
         vm.expectEmit(false, false, false, true);
         emit IMarkets.MarketsBetPlaced(request);
@@ -171,17 +172,21 @@ contract MarketsTest is Test {
         MarketCommitment marketCommitment;
     }
 
-    function makeMarketContext() public view returns (MarketContext memory) {
+    function makeMarketContext(uint256 marketId) public view returns (MarketContext memory) {
         WeightedParimutuelMarkets.MarketInfo memory marketInfo = WeightedParimutuelMarkets.MarketInfo({
             creator: creator,
             deadlineBlock: marketDeadlineBlock,
-            marketId: 0x42,
+            marketId: marketId,
             numOutcomes: 2
         });
         MarketBlob memory marketBlob = MarketBlob({ data: abi.encode(marketInfo) });
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
 
         return MarketContext({ marketInfo: marketInfo, marketBlob: marketBlob, marketCommitment: marketCommitment });
+    }
+
+    function makeMarketContext() public view returns (MarketContext memory) {
+        return makeMarketContext(0x42);
     }
 
     struct BetContext {
@@ -230,6 +235,29 @@ contract MarketsTest is Test {
         return makeBetContext(user, amount, outcome, nonce, marketCommitment, amount);
     }
 
+    function prepareRevealResult(WeightedParimutuelMarkets.ResultInfo memory resultInfo)
+        public
+        view
+        returns (ResultBlob memory resultBlob, ResultCommitment resultCommitment, bytes memory resultSignature)
+    {
+        resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
+        resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
+
+        resultSignature = signResultCommitment(resultCommitment);
+    }
+
+    function revealResult(MarketContext memory marketContext, WeightedParimutuelMarkets.ResultInfo memory resultInfo)
+        public
+        returns (ResultBlob memory resultBlob, ResultCommitment resultCommitment, bytes memory resultSignature)
+    {
+        (resultBlob, resultCommitment, resultSignature) = prepareRevealResult(resultInfo);
+
+        vm.roll(marketDeadlineBlock + 1);
+        vm.expectEmit(true, false, false, true);
+        emit IMarkets.MarketsResultRevealed(marketContext.marketCommitment, resultCommitment);
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+    }
+
     function testEndToEnd() public {
         MarketContext memory marketContext = makeMarketContext();
 
@@ -247,22 +275,15 @@ contract MarketsTest is Test {
         vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
 
         // Reveal market result
-        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
-        {
-            resultInfo = WeightedParimutuelMarkets.ResultInfo({
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight,
                 marketCommitment: marketContext.marketCommitment
-            });
-        }
-        ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
-        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-
-        bytes memory resultSignature = signResultCommitment(resultCommitment);
-        vm.expectEmit(true, false, false, true);
-        emit IMarkets.MarketsResultRevealed(marketContext.marketCommitment, resultCommitment);
-        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+            })
+        );
 
         // Reveal each bet. Alice should get back the whole pot
         uint256 totalBetAmount = bobBetContext.request.amount + aliceBetContext.request.amount;
@@ -340,8 +361,6 @@ contract MarketsTest is Test {
         markets.placeBet(aliceBetContext.request, signRequestCommitment(aliceBetContext.requestCommitment));
     }
 
-    // TODO: test place bet, reveal bet and then replay the place bet
-
     function testEndToEndWeighted() public {
         MarketContext memory marketContext = makeMarketContext();
 
@@ -363,22 +382,15 @@ contract MarketsTest is Test {
         placeBet(carol, carolBetContext.request);
 
         // Reveal market result
-        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
-        {
-            resultInfo = WeightedParimutuelMarkets.ResultInfo({
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice and carol should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight + carolBetContext.betInfo.betWeight,
                 marketCommitment: marketContext.marketCommitment
-            });
-        }
-        ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
-        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-
-        bytes memory resultSignature = signResultCommitment(resultCommitment);
-        vm.expectEmit(true, false, false, true);
-        emit IMarkets.MarketsResultRevealed(marketContext.marketCommitment, resultCommitment);
-        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+            })
+        );
 
         // Reveal each bet. Alice should get back 3/4 of whole pot
         uint256 totalBetAmount =
@@ -410,12 +422,438 @@ contract MarketsTest is Test {
         vm.assertEq(erc20.balanceOf(address(carol)), carolWinnings, "Carol received her winnings");
     }
 
-    // TODO: test abandoning a bet and trying to reveal
+    function testAbandonBet() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+
+        // Approve erc20 and make bet
+        placeBet(alice, aliceBetContext.request);
+        vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
+
+        // Prepare bob to bet, but abandon his bet
+        BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
+
+        // Reveal market result
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+                losingTotalPot: 0,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Reveal bets
+        vm.assertEq(erc20.balanceOf(address(markets)), aliceBetContext.request.amount, "Alice's money is in pool");
+
+        // Bob's reveal should fail
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, bobBetContext.request.betCommitment)
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, bobBetContext.request, bobBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), aliceBetContext.request.amount);
+        vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
+
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            aliceBetContext.requestCommitment,
+            marketContext.marketCommitment,
+            erc20,
+            alice,
+            aliceBetContext.request.amount
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(address(markets)), 0, "Alice claimed her winnings");
+        vm.assertEq(erc20.balanceOf(address(alice)), aliceBetContext.request.amount, "Alice just gets her money back");
+    }
+
+    function testWrongSender() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+
+        // Approve erc20 but bet from another account
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsWrongSender.selector, bob));
+        vm.prank(bob);
+        markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testReplay() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Approve again, but fail due to repeated nonce
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidUserNonce.selector, alice, 1, 0));
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testReplayAfterReveal() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result and Alice bet
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome,
+                losingTotalPot: 0,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+
+        // Approve again, but fail due to repeated nonce
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidUserNonce.selector, alice, 1, 0));
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testSubmissionTooLate(uint256 blocksPastDeadline) public {
+        blocksPastDeadline = bound(blocksPastDeadline, 0, 1000);
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+
+        // Approve but submit too late
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.roll(submissionDeadlineBlock + blocksPastDeadline);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsSubmissionTooLate.selector,
+                submissionDeadlineBlock,
+                submissionDeadlineBlock + blocksPastDeadline
+            )
+        );
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testRevealResultIdempotent() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome,
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,, bytes memory resultSignature) = revealResult(marketContext, resultInfo);
+
+        // Revealing again should not revert
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+    }
+
+    function testRevealResultCannotBeOverriden() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome,
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (, ResultCommitment resultCommitment,) = revealResult(marketContext, resultInfo);
+
+        // Revealing different result should fail
+        {
+            resultInfo.losingTotalPot = 100;
+            (ResultBlob memory resultBlob,, bytes memory resultSignature) = prepareRevealResult(resultInfo);
+
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    MarketsErrors.MarketsResultAlreadyRevealed.selector,
+                    marketContext.marketCommitment,
+                    resultCommitment
+                )
+            );
+            markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+        }
+    }
+
+    function testRevealResultWrongMarket() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome,
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: MarketCommitment.wrap(bytes32(uint256(0x42)))
+        });
+        // Revealing result for wrong market should fail
+        {
+            (ResultBlob memory resultBlob, ResultCommitment resultCommitment, bytes memory resultSignature) =
+                prepareRevealResult(resultInfo);
+
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    MarketsErrors.MarketsInvalidResult.selector, marketContext.marketCommitment, resultCommitment
+                )
+            );
+            markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+        }
+    }
+
+    function testRevealResultTooEarly() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome,
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,, bytes memory resultSignature) = prepareRevealResult(resultInfo);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsResultTooEarly.selector, marketContext.marketCommitment, block.number
+            )
+        );
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+    }
+
+    function testRevealResultInvalidOutcomeIndex() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: marketContext.marketInfo.numOutcomes, // invalid outcome index
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob, ResultCommitment resultCommitment, bytes memory resultSignature) =
+            prepareRevealResult(resultInfo);
+
+        vm.roll(marketDeadlineBlock + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsInvalidResult.selector, marketContext.marketCommitment, resultCommitment
+            )
+        );
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+    }
+
+    function testRevealBetWrongResult() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        revealResult(marketContext, resultInfo);
+
+        // Reveal bet, wrong result
+        resultInfo.winningOutcome = 0;
+        (ResultBlob memory resultBlob, ResultCommitment resultCommitment,) = prepareRevealResult(resultInfo);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsInconsistentResult.selector, marketContext.marketCommitment, resultCommitment
+            )
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRevealBetWrongMarketForResult() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob, ResultCommitment resultCommitment,) = revealResult(marketContext, resultInfo);
+
+        // Reveal bet, wrong market
+        MarketContext memory wrongMarketContext = makeMarketContext(0x23);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsInconsistentResult.selector, wrongMarketContext.marketCommitment, resultCommitment
+            )
+        );
+        markets.revealBet(wrongMarketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRevealBetWrongMarketInBetBlob() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
+
+        // Reveal bet, wrong market in bet blob
+        MarketContext memory wrongMarketContext = makeMarketContext(0x23);
+        aliceBetContext = makeBetContext(alice, 10e18, 1, 0, wrongMarketContext.marketCommitment);
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidRevealBet.selector));
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRevealBetWrongBetCommitment() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        uint256 losingOutcome = 1;
+        uint256 winningOutcome = 0;
+        BetContext memory aliceBetContext =
+            makeBetContext(alice, 10e18, losingOutcome, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: winningOutcome,
+            losingTotalPot: 0,
+            winningTotalWeight: aliceBetContext.betInfo.betWeight,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
+
+        // Reveal bet, but make betblob contain a different outcome
+        BetContext memory wrongBetContext =
+            makeBetContext(alice, 10e18, winningOutcome, 0, marketContext.marketCommitment);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsInvalidBetRequest.selector,
+                aliceBetContext.requestCommitment,
+                wrongBetContext.request.betCommitment,
+                aliceBetContext.request.betCommitment
+            )
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, wrongBetContext.betBlob);
+    }
+
+    function testBatchRevealBetWrongInput() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        // Reveal market result
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+                losingTotalPot: bobBetContext.request.amount,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Incorrect batch reveal
+        BetRequest[] memory requests = new BetRequest[](2);
+        BetBlob[] memory betBlobs = new BetBlob[](1);
+        vm.expectRevert(MarketsErrors.MarketsInvalidBatchRevealBet.selector);
+        markets.batchRevealBet(marketContext.marketBlob, resultBlob, requests, betBlobs);
+    }
+
+    function testBatchReveal() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        // Reveal market result
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+                losingTotalPot: bobBetContext.request.amount,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Reveal all bets in a batch
+        uint256 totalBetAmount = bobBetContext.request.amount + aliceBetContext.request.amount;
+        BetRequest[] memory requests = new BetRequest[](2);
+        requests[0] = aliceBetContext.request;
+        requests[1] = bobBetContext.request;
+        BetBlob[] memory betBlobs = new BetBlob[](2);
+        betBlobs[0] = aliceBetContext.betBlob;
+        betBlobs[1] = bobBetContext.betBlob;
+
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(
+            aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, alice, totalBetAmount
+        );
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsBetRevealed(bobBetContext.requestCommitment, marketContext.marketCommitment, erc20, bob, 0);
+        markets.batchRevealBet(marketContext.marketBlob, resultBlob, requests, betBlobs);
+
+        vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
+        vm.assertEq(erc20.balanceOf(address(markets)), 0, "Alice claimed her winnings");
+        vm.assertEq(erc20.balanceOf(address(alice)), totalBetAmount, "Alice received her winnings");
+    }
 
     function testFees(uint256 creatorFeesDecimal, uint256 operatorFeesDecimal) public {
         creatorFeesDecimal = bound(creatorFeesDecimal, 0, 3e3);
         operatorFeesDecimal = bound(operatorFeesDecimal, 0, 3e3);
 
+        vm.expectEmit(true, false, false, true);
+        emit IMarkets.MarketsFeesChanged(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
         vm.prank(admin);
         markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
 
@@ -429,20 +867,15 @@ contract MarketsTest is Test {
         placeBet(bob, bobBetContext.request);
 
         // Reveal market result
-        WeightedParimutuelMarkets.ResultInfo memory resultInfo;
-        {
-            resultInfo = WeightedParimutuelMarkets.ResultInfo({
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
                 losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight,
                 marketCommitment: marketContext.marketCommitment
-            });
-        }
-        ResultBlob memory resultBlob = ResultBlob({ data: abi.encode(resultInfo) });
-        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-
-        bytes memory resultSignature = signResultCommitment(resultCommitment);
-        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+            })
+        );
 
         // Reveal each bet. Alice should get back the whole pot, fees should come out of that
         uint256 totalBetAmount = bobBetContext.request.amount + aliceBetContext.request.amount;
@@ -501,5 +934,72 @@ contract MarketsTest is Test {
         }
 
         vm.assertEq(erc20.balanceOf(address(markets)), 0, "All collateral distributed");
+    }
+
+    function testOperatorFeesWrongInput() public {
+        IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
+        requests[0] =
+            IMarkets.FeeDistributionRequest({ token: erc20, users: new address[](2), amounts: new uint256[](3) });
+        requests[0].users[0] = bob;
+        requests[0].users[1] = carol;
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsFeeDistributionRequestInvalid.selector));
+        vm.prank(operatorFeeDistributor);
+        markets.distributeOperatorFees(requests);
+    }
+
+    function testOperatorFeesExceed(uint256 operatorFeesDecimal, uint256 extra) public {
+        operatorFeesDecimal = bound(operatorFeesDecimal, 0, 3e3);
+        extra = bound(extra, 1, 1000);
+
+        vm.prank(admin);
+        markets.setFees(uint16(0), uint16(operatorFeesDecimal));
+
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Alice bets
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // place bet on different market to have enough tokens to technically cover the extra fees
+        {
+            BetContext memory bobBetContext = makeBetContext(bob, extra, 1, 0, makeMarketContext(0x23).marketCommitment);
+            placeBet(bob, bobBetContext.request);
+        }
+
+        // Reveal market result
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
+                losingTotalPot: 0,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Reveal bet, get fees
+        uint256 operatorFee = operatorFeesDecimal * aliceBetContext.request.amount / markets.FEE_DIVISOR();
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+
+        // distribute excess operator fee to bob and carol
+        {
+            IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
+            requests[0] =
+                IMarkets.FeeDistributionRequest({ token: erc20, users: new address[](2), amounts: new uint256[](2) });
+            requests[0].users[0] = bob;
+            requests[0].amounts[0] = operatorFee / 3;
+
+            requests[0].users[1] = carol;
+            requests[0].amounts[1] = operatorFee - requests[0].amounts[0] + extra;
+
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    MarketsErrors.MarketsNotEnoughOperatorFees.selector, erc20, operatorFee, operatorFee + extra
+                )
+            );
+            vm.prank(operatorFeeDistributor);
+            markets.distributeOperatorFees(requests);
+        }
     }
 }

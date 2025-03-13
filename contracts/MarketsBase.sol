@@ -21,7 +21,6 @@ import {
     nullResultCommitment
 } from "./Commitments.sol";
 
-// TODO: ERC2771 Context? for metatx
 abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl {
     using SafeERC20 for IERC20;
 
@@ -71,24 +70,28 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     function setFees(uint16 _creatorFeeDecimal, uint16 _operatorFeeDecimal) external onlyRole(DEFAULT_ADMIN_ROLE) {
         creatorFeeDecimal = _creatorFeeDecimal;
         operatorFeeDecimal = _operatorFeeDecimal;
-        // TODO: emit event?
+        emit MarketsFeesChanged(_creatorFeeDecimal, _operatorFeeDecimal);
     }
 
     /**
      * @inheritdoc IMarkets
      */
-    function placeBet(BetRequest calldata bet, bytes calldata /* requestSignature */ ) external {
+    function placeBet(BetRequest calldata bet, bytes calldata requestSignature) external {
         require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
 
-        // TODO: uncomment signature verification later. Excluding it for now for easier integration
-        // address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
-        // _checkRole(BET_SIGNATURE_ROLE, signerAddress);
+        address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
+        _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
         require(bet.nonce == expectedNonce, MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce));
+
+        require(
+            block.number < bet.submissionDeadlineBlock,
+            MarketsSubmissionTooLate(bet.submissionDeadlineBlock, block.number)
+        );
 
         _verifyRequest(bet, requestCommitment);
 
@@ -98,7 +101,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         bets[requestCommitment] = BetState({ amount: bet.amount });
         userNonces[bet.from]++;
 
-        bet.token.safeTransferFrom(bet.from, address(this), bet.amount);
+        bet.token.safeTransferFrom(_msgSender(), address(this), bet.amount);
 
         emit MarketsBetPlaced(bet);
     }
@@ -111,8 +114,6 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultBlob calldata resultBlob,
         bytes calldata resultSignature
     ) external {
-        // Should this be an EIP-712 signature?
-
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         address signerAddress = ECDSA.recover(ResultCommitment.unwrap(resultCommitment), resultSignature);
@@ -126,7 +127,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             existingCommitment == nullResultCommitment,
             MarketsResultAlreadyRevealed(marketCommitment, existingCommitment)
         );
-        // Make sure result blob depends on market
+        // Make sure result blob depends on market. Done here to enforce
+        // invariant that resultBlob has to link to marketCommitment. The
+        // implementation cannot accidentally leave that out. There is redundant
+        // work here, but costs ~2k gas which is small compared to rest of the
+        // function
         require(
             marketCommitment == _getMarketFromResult(resultBlob),
             MarketsInvalidResult(marketCommitment, resultCommitment)
@@ -148,7 +153,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         BetRequest[] calldata requests,
         BetBlob[] calldata betBlobs
     ) external {
-        require(requests.length == betBlobs.length, MarketsBetInvalidBatchReveal());
+        require(requests.length == betBlobs.length, MarketsInvalidBatchRevealBet());
 
         for (uint256 i = 0; i < requests.length; i++) {
             revealBet(marketBlob, resultBlob, requests[i], betBlobs[i]);
@@ -181,7 +186,6 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         for (uint256 i = 0; i < requests.length; i++) {
             FeeDistributionRequest calldata request = requests[i];
             IERC20 token = request.token;
-            uint256 totalFeesAvailable = operatorFees[token];
             require(request.users.length == request.amounts.length, MarketsFeeDistributionRequestInvalid());
 
             uint256 totalTaken = 0;
@@ -192,12 +196,14 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
                 token.safeTransfer(user, amount);
             }
 
+            // Regarding re-entrancy - this function can only be called by a Fee
+            // Distributor, so a re-entrancy would have to go through a
+            // distributor address.
+            // Checking if we have recorded enough in operator fees after the transfer should avoid re-entrancy
+            uint256 totalFeesAvailable = operatorFees[token];
             require(
                 totalTaken <= totalFeesAvailable, MarketsNotEnoughOperatorFees(token, totalFeesAvailable, totalTaken)
             );
-            // TODO: prevent re-entrancy attack where distribute is called
-            // recursively twice for half the amount. The side effect below will
-            // "reset" the available fees like only half was withdrawn
             operatorFees[token] = totalFeesAvailable - totalTaken;
         }
     }
@@ -215,7 +221,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
         ResultCommitment existingCommitment = marketResults[marketCommitment];
         require(existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment));
-        require(marketCommitment == _getMarketFromBet(betBlob), MarketsBetInvalidBatchReveal());
+        require(marketCommitment == _getMarketFromBet(betBlob), MarketsInvalidRevealBet());
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
         BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
@@ -225,12 +231,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         );
 
         BetState storage betState = bets[requestCommitment];
-        require(betState.amount == request.amount, MarketsBetAlreadyRevealed(betCommitment));
+        require(betState.amount == request.amount, MarketsBetDoesntExist(betCommitment));
         // Since the bet is revealed, no amount should remain to be revealed
         betState.amount = 0;
 
-        // TODO: make sure the bet has not been entered after reveal (store reveal block)
-        // TODO: get marketCommitment out of betBlob
+        // TODO: if submissionDeadline > market deadline, absorb user's bet into operator fee?
         token = request.token;
         to = request.from;
         address creator;

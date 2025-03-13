@@ -49,6 +49,9 @@ struct BetRequest {
      * block deadline when user can submit bet (needed?)
      */
     uint256 submissionDeadlineBlock;
+    // TODO: refundDeadline. User should be able to get their money back if
+    // result not established yet by this time
+
     /**
      * Commitment for the hidden portion of the bet
      */

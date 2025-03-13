@@ -15,12 +15,6 @@ string constant ADMIN_ADDRESS = "ADMIN_ADDRESS";
 string constant EXTERNAL_ADDRESS_CONFIG_PATH = "EXTERNAL_ADDRESS_CONFIG_PATH";
 
 abstract contract DeployBase is OpenZeppelinDeployments {
-    address public admin;
-
-    constructor() {
-        admin = vm.envAddress(ADMIN_ADDRESS);
-    }
-
     function loadExternalAddressConfigFromJson(string memory filepath) public view returns (bytes memory) {
         string memory root = vm.projectRoot();
         string memory path = string.concat(root, "/", filepath);
@@ -28,13 +22,15 @@ abstract contract DeployBase is OpenZeppelinDeployments {
         return vm.parseJson(json);
     }
 
-    function setUpContracts() internal virtual;
+    function setUpContracts(address admin) internal virtual;
 
     function run() external virtual {
+        address admin = vm.envAddress(ADMIN_ADDRESS);
+
         startBroadcastIfNotDryRun();
 
         // run the setup scripts
-        setUpContracts();
+        setUpContracts(admin);
 
         // we don't need broadcast from here on
         tryStopBroadcast();
@@ -45,26 +41,26 @@ abstract contract DeployBase is OpenZeppelinDeployments {
 }
 
 contract Deploy is DeployBase {
-    WeightedParimutuelMarkets public parimutuelMarkets;
+    WeightedParimutuelMarkets public markets;
 
-    function setUpContracts() internal virtual override {
+    function setUpContracts(address admin) internal virtual override {
         {
             bytes memory constructorArgs = abi.encode(admin);
             address implementation = setUpContract("WeightedParimutuelMarkets", constructorArgs, "", false);
-            parimutuelMarkets = WeightedParimutuelMarkets(implementation);
+            markets = WeightedParimutuelMarkets(implementation);
         }
     }
 }
 
 contract DeployTestnet is Deploy {
-    TestERC20 public token;
+    TestERC20 public erc20;
 
-    function setUpContracts() internal override {
-        Deploy.setUpContracts();
+    function setUpContracts(address admin) internal override {
+        Deploy.setUpContracts(admin);
 
         {
             address implementation = setUpContract("TestERC20", "", "", false);
-            token = TestERC20(implementation);
+            erc20 = TestERC20(implementation);
         }
     }
 }

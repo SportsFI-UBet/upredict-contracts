@@ -93,7 +93,7 @@ contract WeightedParimutuelMarkets is MarketsBase {
         ResultBlob calldata resultBlob
     ) internal view override {
         MarketInfo memory marketInfo = abi.decode(marketBlob.data, (MarketInfo));
-        require(marketInfo.deadlineBlock >= block.number, MarketsResultTooEarly(marketCommitment, block.number));
+        require(marketInfo.deadlineBlock < block.number, MarketsResultTooEarly(marketCommitment, block.number));
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
         require(
