@@ -109,16 +109,23 @@ contract WeightedParimutuelMarkets is MarketsBase {
         ResultBlob calldata resultBlob,
         BetRequest calldata request,
         BetBlob calldata betBlob
-    ) internal pure override returns (uint256 amount, address creator) {
+    )
+        internal
+        pure
+        override
+        returns (uint256 winningPotAmount, uint256 losingPotAmount, uint256 marketDeadlineBlock, address creator)
+    {
+        MarketInfo memory marketInfo = abi.decode(marketBlob.data, (MarketInfo));
         BetHiddenInfo memory hiddenInfo = abi.decode(betBlob.data, (BetHiddenInfo));
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
 
-        // TODO: any more sanity checks?
+        marketDeadlineBlock = marketInfo.deadlineBlock;
 
         creator = abi.decode(marketBlob.data, (MarketInfo)).creator;
         if (hiddenInfo.outcome == resultInfo.winningOutcome) {
-            amount = request.amount
-                + Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
+            winningPotAmount = request.amount;
+            losingPotAmount =
+                Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
         }
     }
 

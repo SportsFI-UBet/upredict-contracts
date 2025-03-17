@@ -218,40 +218,58 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         BetBlob calldata betBlob
     ) public returns (IERC20 token, address to, uint256 amount) {
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
-        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-        ResultCommitment existingCommitment = marketResults[marketCommitment];
-        require(existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment));
-        require(marketCommitment == _getMarketFromBet(betBlob), MarketsInvalidRevealBet());
+        {
+            ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
+            ResultCommitment existingCommitment = marketResults[marketCommitment];
+            require(
+                existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment)
+            );
+            require(marketCommitment == _getMarketFromBet(betBlob), MarketsInvalidRevealBet());
+        }
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
-        BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
-        require(
-            request.betCommitment == betCommitment,
-            MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
-        );
+        {
+            BetState storage betState = bets[requestCommitment];
+            BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
+            require(
+                request.betCommitment == betCommitment,
+                MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
+            );
+            require(betState.amount == request.amount, MarketsBetDoesntExist(betCommitment));
 
-        BetState storage betState = bets[requestCommitment];
-        require(betState.amount == request.amount, MarketsBetDoesntExist(betCommitment));
-        // Since the bet is revealed, no amount should remain to be revealed
-        betState.amount = 0;
+            // Since the bet is revealed, no amount should remain to be revealed
+            betState.amount = 0;
+        }
 
-        // TODO: if submissionDeadline > market deadline, absorb user's bet into operator fee?
         token = request.token;
         to = request.from;
-        address creator;
-        (amount, creator) = _getPayout(marketBlob, resultBlob, request, betBlob);
-        if (amount > 0) {
-            // fee can be taken out here as percentage of amount. If we assume
-            // fees are taken as a percentage of every bet, then taking the same
-            // percentage of every bettor's winnings is the same as doing it on the
-            // whole pool.
-            uint256 creatorFee = (creatorFeeDecimal * amount) / FEE_DIVISOR;
-            uint256 operatorFee = (operatorFeeDecimal * amount) / FEE_DIVISOR;
+        (uint256 winningPotAmount, uint256 losingPotAmount, uint256 marketDeadlineBlock, address creator) =
+            _getPayout(marketBlob, resultBlob, request, betBlob);
+        if (request.submissionDeadlineBlock > marketDeadlineBlock) {
+            // If bet request somehow had a submission deadline after the market
+            // ended, we should just ignore such bets and refund the user (don't punish the user).
+            //
+            // This is highly dependent on the backend. The market result must
+            // not include the money from this bet in its weight calculations,
+            // otherwise this would lead to more money leaving the contract than
+            // was put in.
+            winningPotAmount = request.amount;
+            losingPotAmount = 0;
+        }
+        if (losingPotAmount > 0) {
+            // only charge fees on the losing pot, to discourage markets that
+            // are heavily imbalanced. If the losing pot is small (because it's
+            // a very unlikely result), then creator fees are also small
+            uint256 creatorFee = (creatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
+            uint256 operatorFee = (operatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
             creatorFees[token][creator] += creatorFee;
             operatorFees[token] += operatorFee;
             emit MarketsBetFeeCollected(marketCommitment, token, creator, creatorFee, operatorFee);
-            amount -= (creatorFee + operatorFee);
+            losingPotAmount -= (creatorFee + operatorFee);
+        }
 
+        amount = winningPotAmount + losingPotAmount;
+        if (amount > 0) {
             token.safeTransfer(to, amount);
         }
 
@@ -264,14 +282,22 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     function _verifyRequest(BetRequest calldata request, RequestCommitment requestCommitment) internal view virtual;
 
     /**
-     * Hook to derive the payout from the bet blob
+     * Hook to derive the payout from the bet blob. The split of the amounts is
+     * there for different fees on winning vs losing pots
+     * @return winningPotAmount - amount that is refunded back to the user from
+     *      the winning pot (0 if they lose, their original amount if they win)
+     * @return losingPotAmount - amount distributed from the losing pot
      */
     function _getPayout(
         MarketBlob calldata marketBlob,
         ResultBlob calldata resultBlob,
         BetRequest calldata request,
         BetBlob calldata betBlob
-    ) internal view virtual returns (uint256 amount, address creator);
+    )
+        internal
+        view
+        virtual
+        returns (uint256 winningPotAmount, uint256 losingPotAmount, uint256 marketDeadlineBlock, address creator);
 
     /**
      * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong)
