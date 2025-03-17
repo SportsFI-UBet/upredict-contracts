@@ -112,6 +112,38 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     /**
      * @inheritdoc IMarkets
      */
+    function requestRefund(BetRequest calldata request, BetBlob calldata betBlob)
+        external
+        returns (IERC20 token, address to, uint256 amount)
+    {
+        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
+        BetState storage betState = bets[requestCommitment];
+        require(betState.amount == request.amount, MarketsBetDoesntExist(requestCommitment));
+        betState.amount = 0;
+
+        require(
+            block.number >= request.refundStartBlock,
+            MarketsRefundTooEarly(requestCommitment, request.refundStartBlock, block.number)
+        );
+
+        MarketCommitment marketCommitment = _getMarketFromBet(betBlob);
+        ResultCommitment resultCommitment = marketResults[marketCommitment];
+        require(
+            resultCommitment == nullResultCommitment, MarketsResultAlreadyRevealed(marketCommitment, resultCommitment)
+        );
+
+        token = request.token;
+        to = request.from;
+        amount = request.amount;
+
+        token.safeTransfer(to, amount);
+
+        emit MarketsRefundIssued(requestCommitment, marketCommitment, token, to, amount);
+    }
+
+    /**
+     * @inheritdoc IMarkets
+     */
     function revealMarketResult(
         MarketBlob calldata marketBlob,
         ResultBlob calldata resultBlob,
@@ -239,7 +271,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
                 request.betCommitment == betCommitment,
                 MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
             );
-            require(betState.amount == request.amount, MarketsBetDoesntExist(betCommitment));
+            require(betState.amount == request.amount, MarketsBetDoesntExist(requestCommitment));
 
             // Since the bet is revealed, no amount should remain to be revealed
             betState.amount = 0;

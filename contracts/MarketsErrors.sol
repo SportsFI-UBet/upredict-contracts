@@ -9,6 +9,7 @@ interface MarketsErrors {
     error MarketsWrongSender(address sender);
     error MarketsInvalidUserNonce(address user, uint256 expectedNonce, uint256 nonce);
     error MarketsSubmissionTooLate(uint256 submissionDeadline, uint256 currentBlock);
+    error MarketsRefundTooEarly(RequestCommitment requestCommitment, uint256 refundStartBlock, uint256 currentBlock);
 
     error MarketsResultAlreadyRevealed(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
     error MarketsResultTooEarly(MarketCommitment marketCommitment, uint256 blockNumber);
@@ -18,7 +19,7 @@ interface MarketsErrors {
     );
 
     error MarketsInconsistentResult(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
-    error MarketsBetDoesntExist(BetCommitment betCommitment);
+    error MarketsBetDoesntExist(RequestCommitment requestCommitment);
     error MarketsInvalidRevealBet();
     error MarketsInvalidBatchRevealBet();
 

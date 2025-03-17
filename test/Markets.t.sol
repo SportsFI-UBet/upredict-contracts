@@ -94,6 +94,7 @@ contract MarketsTest is Test, DeployTestnet {
 
     uint256 public marketDeadlineBlock;
     uint256 public submissionDeadlineBlock;
+    uint256 public refundStartBlock;
 
     using MessageHashUtils for bytes32;
 
@@ -117,6 +118,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         submissionDeadlineBlock = block.number + 100;
         marketDeadlineBlock = block.number + 1000;
+        refundStartBlock = marketDeadlineBlock + 1000;
 
         // Set up permissions
         bytes32 role = markets.RESULT_SIGNATURE_ROLE();
@@ -217,6 +219,7 @@ contract MarketsTest is Test, DeployTestnet {
             from: user,
             nonce: uint96(nonce),
             submissionDeadlineBlock: submissionDeadlineBlock,
+            refundStartBlock: refundStartBlock,
             betCommitment: BetCommitment.wrap(keccak256(betBlob.data))
         });
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
@@ -451,7 +454,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Bob's reveal should fail
         vm.expectRevert(
-            abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, bobBetContext.request.betCommitment)
+            abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, bobBetContext.requestCommitment)
         );
         markets.revealBet(marketContext.marketBlob, resultBlob, bobBetContext.request, bobBetContext.betBlob);
         vm.assertEq(erc20.balanceOf(address(markets)), aliceBetContext.request.amount);
@@ -546,6 +549,96 @@ contract MarketsTest is Test, DeployTestnet {
         );
         vm.prank(alice);
         markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testRefund(uint256 aliceAmount) public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        aliceAmount = bound(aliceAmount, 1e6, 10e18);
+        BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        // Too early to refund
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsRefundTooEarly.selector,
+                aliceBetContext.requestCommitment,
+                refundStartBlock,
+                block.number
+            )
+        );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+
+        // Still too early to refund
+        vm.roll(refundStartBlock - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsRefundTooEarly.selector,
+                aliceBetContext.requestCommitment,
+                refundStartBlock,
+                block.number
+            )
+        );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+
+        // Can refund
+        vm.assertEq(erc20.balanceOf(alice), 0, "Alice doesn't have any money");
+        vm.roll(refundStartBlock);
+        vm.expectEmit(true, true, true, true);
+        emit IMarkets.MarketsRefundIssued(
+            aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, alice, aliceAmount
+        );
+        vm.prank(bob); // can be on someone else's behalf
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(alice), aliceAmount, "Alice gets full refund");
+
+        // Can't refund twice
+        vm.roll(refundStartBlock);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, aliceBetContext.requestCommitment)
+        );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRefundBetDoesntExist(uint256 aliceAmount) public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        aliceAmount = bound(aliceAmount, 1e6, 10e18);
+        BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
+
+        // Bet doesn't exist
+        vm.roll(refundStartBlock);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, aliceBetContext.requestCommitment)
+        );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRefundAfterMarketResult(uint256 aliceAmount) public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        aliceAmount = bound(aliceAmount, 1e6, 10e18);
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        (, ResultCommitment resultCommitment,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcome: aliceBetContext.betInfo.outcome,
+                losingTotalPot: 0,
+                winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Cannot refund after market result already revealed
+        vm.roll(refundStartBlock);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsResultAlreadyRevealed.selector, marketContext.marketCommitment, resultCommitment
+            )
+        );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
     }
 
     function testRevealResultIdempotent() public {

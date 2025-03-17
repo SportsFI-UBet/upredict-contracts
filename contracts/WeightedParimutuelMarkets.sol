@@ -119,6 +119,8 @@ contract WeightedParimutuelMarkets is MarketsBase {
         BetHiddenInfo memory hiddenInfo = abi.decode(betBlob.data, (BetHiddenInfo));
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
 
+        // TODO: keep track of total betWeight used, so it does not exceed winningTotalWeight
+
         marketDeadlineBlock = marketInfo.deadlineBlock;
 
         creator = abi.decode(marketBlob.data, (MarketInfo)).creator;

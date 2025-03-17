@@ -40,18 +40,20 @@ struct BetBlob {
 type BetCommitment is bytes32;
 
 struct BetRequest {
-    // TODO: implementation version? Make sure it matches the contract implementation
+    // TODO: need contract address in request to avoid replay attacks on other contracts
     IERC20 token;
     uint96 amount;
     address from; // who is making the bet
     uint96 nonce; // user nonce to prevent replay attack
     /**
-     * block deadline when user can submit bet (needed?)
+     * block deadline when user can submit bet
      */
     uint256 submissionDeadlineBlock;
-    // TODO: refundDeadline. User should be able to get their money back if
-    // result not established yet by this time
-
+    /**
+     * block when a full refund can be requested. This is to prevent collateral
+     * getting stuck in the contract if settlement does not come in time.
+     */
+    uint256 refundStartBlock;
     /**
      * Commitment for the hidden portion of the bet
      */
