@@ -27,6 +27,13 @@ interface IMarkets {
 
     event MarketsBetPlaced(BetRequest request);
     event MarketsResultRevealed(MarketCommitment indexed marketCommitment, ResultCommitment resultCommitment);
+    event MarketsRefundIssued(
+        RequestCommitment indexed requestCommitment,
+        MarketCommitment marketCommitment,
+        IERC20 indexed token,
+        address indexed user,
+        uint256 payout
+    );
     event MarketsBetRevealed(
         RequestCommitment indexed requestCommitment,
         MarketCommitment marketCommitment,
@@ -48,6 +55,13 @@ interface IMarkets {
      * @param betSignature the bet has to be signed by a priveleged entity
      */
     function placeBet(BetRequest calldata request, bytes calldata betSignature) external;
+
+    /**
+     * If market has not settled in time, user can request a full refund.
+     */
+    function requestRefund(BetRequest calldata request, BetBlob calldata betBlob)
+        external
+        returns (IERC20 token, address to, uint256 amount);
 
     /**
      * Record a market result that can be used during bet reveal to give payouts. Note that if the `marketBlob` is known, anyone can enter the result.
