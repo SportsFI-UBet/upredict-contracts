@@ -23,6 +23,8 @@ interface IMarkets {
         uint256[] amounts;
     }
 
+    event MarketsFeesChanged(uint16 creatorFeeDecimal, uint16 operatorFeeDecimal);
+
     event MarketsBetPlaced(BetRequest request);
     event MarketsResultRevealed(MarketCommitment indexed marketCommitment, ResultCommitment resultCommitment);
     event MarketsBetRevealed(

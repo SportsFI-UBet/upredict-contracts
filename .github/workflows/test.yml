@@ -10,7 +10,7 @@ env:
   # https://github.com/foundry-rs/foundry/releases/tag/nightly-3ff3d0562215bca620e07c5c4c154eec8da0f04b
   # 2023-10-02 release of foundry
   FOUNDRY_VERSION: nightly-3ff3d0562215bca620e07c5c4c154eec8da0f04b
-  SLITHER_VERSION: 0.10.0
+  SLITHER_VERSION: 0.11.0
   BUN_VERSION: 1.1.30
 
 # When pushing new commits to a pull request, automatically cancel the previous
