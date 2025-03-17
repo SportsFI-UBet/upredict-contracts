@@ -80,6 +80,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      */
     function placeBet(BetRequest calldata bet, bytes calldata requestSignature) external {
         require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
+        require(address(this) == bet.marketsContract, MarketsWrongContract(bet.marketsContract));
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
 

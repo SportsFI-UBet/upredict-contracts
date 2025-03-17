@@ -214,6 +214,7 @@ contract MarketsTest is Test, DeployTestnet {
         });
         BetBlob memory betBlob = BetBlob({ data: abi.encode(betInfo) });
         BetRequest memory request = BetRequest({
+            marketsContract: address(markets),
             token: erc20,
             amount: uint96(amount),
             from: user,
@@ -485,6 +486,21 @@ contract MarketsTest is Test, DeployTestnet {
         vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsWrongSender.selector, bob));
         vm.prank(bob);
         markets.placeBet(aliceBetContext.request, signature);
+    }
+
+    function testWrongContract() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare request for a different contract
+        WeightedParimutuelMarkets originalMarkets = markets;
+        markets = new WeightedParimutuelMarkets(admin);
+        BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
+
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsWrongContract.selector, markets));
+        vm.prank(alice);
+        originalMarkets.placeBet(aliceBetContext.request, signature);
     }
 
     function testReplay() public {
