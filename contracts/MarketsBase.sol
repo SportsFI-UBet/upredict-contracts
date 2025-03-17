@@ -5,6 +5,7 @@ import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Context } from "@openzeppelin/contracts/utils/Context.sol";
 import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 
 import { MarketsErrors } from "./MarketsErrors.sol";
@@ -23,6 +24,7 @@ import {
 
 abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl {
     using SafeERC20 for IERC20;
+    using MessageHashUtils for bytes32;
 
     /**
      * Stored on the blockchain to reference during reveal phase
@@ -81,7 +83,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
         RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
 
-        address signerAddress = ECDSA.recover(RequestCommitment.unwrap(requestCommitment), requestSignature);
+        address signerAddress =
+            ECDSA.recover(RequestCommitment.unwrap(requestCommitment).toEthSignedMessageHash(), requestSignature);
         _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
@@ -116,7 +119,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
     ) external {
         MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
         ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-        address signerAddress = ECDSA.recover(ResultCommitment.unwrap(resultCommitment), resultSignature);
+        address signerAddress =
+            ECDSA.recover(ResultCommitment.unwrap(resultCommitment).toEthSignedMessageHash(), resultSignature);
         _checkRole(RESULT_SIGNATURE_ROLE, signerAddress);
 
         ResultCommitment existingCommitment = marketResults[marketCommitment];
