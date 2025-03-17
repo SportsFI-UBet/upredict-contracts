@@ -133,7 +133,7 @@ contract MarketsTest is Test, DeployTestnet {
     }
 
     function signCommitment(uint256 privateKey, bytes32 commitment) public pure returns (bytes memory sig) {
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, commitment);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, commitment.toEthSignedMessageHash());
         sig = abi.encodePacked(r, s, v); // as detailed in Openzeppelin ECDSA.recover
     }
 
@@ -1012,7 +1012,8 @@ contract MarketsTest is Test, DeployTestnet {
 
         // place bet on different market to have enough tokens to technically cover the extra fees
         {
-            BetContext memory extraBetContext = makeBetContext(bob, extra, 1, 1, makeMarketContext(0x23).marketCommitment);
+            BetContext memory extraBetContext =
+                makeBetContext(bob, extra, 1, 1, makeMarketContext(0x23).marketCommitment);
             placeBet(bob, extraBetContext.request);
         }
 
