@@ -779,6 +779,51 @@ contract MarketsTest is Test, DeployTestnet {
         markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, wrongBetContext.betBlob);
     }
 
+    function testRevealBetLateSubmission(uint256 aliceAmount, uint256 bobAmount, uint256 carolAmount) public {
+        // If the backend somehow screws up and allows a bet request whose
+        // submission deadline is _after_ market deadline, we need to just
+        // refund the user's bet without any winnings
+
+        aliceAmount = bound(aliceAmount, 1e6, 10e18);
+        bobAmount = bound(bobAmount, 1e6, 10e18);
+        carolAmount = bound(bobAmount, 1e6, 10e18);
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Fees should not affect test
+        vm.prank(admin);
+        markets.setFees(uint16(3e3), uint16(3e3));
+
+        // Alice bets on outcome 0, bob bets on outcome 1
+        // whoever put more wins
+        uint256 winningOutcome = aliceAmount > bobAmount ? 0 : 1;
+        BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 0, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, bobAmount, 1, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        // Change deadline for carol to be after market end. Will place the bet _after_ result reveal
+        submissionDeadlineBlock = marketDeadlineBlock + 100;
+        BetContext memory carolBetContext = makeBetContext(carol, carolAmount, 0, 0, marketContext.marketCommitment);
+
+        // Reveal market result
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcome: winningOutcome,
+            losingTotalPot: winningOutcome == 0 ? bobAmount : aliceAmount,
+            winningTotalWeight: winningOutcome == 0 ? aliceAmount : bobAmount,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
+
+        // Place carol's bet after market settled
+        placeBet(carol, carolBetContext.request);
+
+        // Reveal carol's bet - it should just be a refund, no matter who won
+        vm.assertEq(erc20.balanceOf(carol), 0, "Carol doesn't have any money");
+        markets.revealBet(marketContext.marketBlob, resultBlob, carolBetContext.request, carolBetContext.betBlob);
+        vm.assertEq(erc20.balanceOf(carol), carolAmount, "Carol gets exact refund");
+    }
+
     function testBatchRevealBetWrongInput() public {
         MarketContext memory marketContext = makeMarketContext();
 
@@ -889,9 +934,9 @@ contract MarketsTest is Test, DeployTestnet {
         vm.assertEq(erc20.balanceOf(address(markets)), totalBetAmount);
         vm.assertEq(erc20.balanceOf(address(bob)), 0, "Bob did not win");
 
-        // Alice revealing will transfer fees
-        uint256 creatorFee = creatorFeesDecimal * totalBetAmount / markets.FEE_DIVISOR();
-        uint256 operatorFee = operatorFeesDecimal * totalBetAmount / markets.FEE_DIVISOR();
+        // Alice revealing will transfer fees. Fees only apply on losing pot
+        uint256 creatorFee = creatorFeesDecimal * bobBetContext.request.amount / markets.FEE_DIVISOR();
+        uint256 operatorFee = operatorFeesDecimal * bobBetContext.request.amount / markets.FEE_DIVISOR();
         uint256 aliceAmount = totalBetAmount - creatorFee - operatorFee;
         vm.expectEmit(true, true, true, true);
         emit IMarkets.MarketsBetFeeCollected(marketContext.marketCommitment, erc20, creator, creatorFee, operatorFee);
@@ -961,10 +1006,14 @@ contract MarketsTest is Test, DeployTestnet {
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
         placeBet(alice, aliceBetContext.request);
 
+        // Bob bets - he is the losing pot
+        BetContext memory bobBetContext = makeBetContext(bob, 10e18, 0, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
         // place bet on different market to have enough tokens to technically cover the extra fees
         {
-            BetContext memory bobBetContext = makeBetContext(bob, extra, 1, 0, makeMarketContext(0x23).marketCommitment);
-            placeBet(bob, bobBetContext.request);
+            BetContext memory extraBetContext = makeBetContext(bob, extra, 1, 1, makeMarketContext(0x23).marketCommitment);
+            placeBet(bob, extraBetContext.request);
         }
 
         // Reveal market result
@@ -972,17 +1021,17 @@ contract MarketsTest is Test, DeployTestnet {
             marketContext,
             WeightedParimutuelMarkets.ResultInfo({
                 winningOutcome: aliceBetContext.betInfo.outcome, // alice should win
-                losingTotalPot: 0,
+                losingTotalPot: bobBetContext.request.amount,
                 winningTotalWeight: aliceBetContext.betInfo.betWeight,
                 marketCommitment: marketContext.marketCommitment
             })
         );
 
         // Reveal bet, get fees
-        uint256 operatorFee = operatorFeesDecimal * aliceBetContext.request.amount / markets.FEE_DIVISOR();
+        uint256 operatorFee = operatorFeesDecimal * bobBetContext.request.amount / markets.FEE_DIVISOR();
         markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
 
-        // distribute excess operator fee to bob and carol
+        // Try to distribute excess operator fee to bob and carol
         {
             IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
             requests[0] =
