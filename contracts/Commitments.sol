@@ -40,7 +40,10 @@ struct BetBlob {
 type BetCommitment is bytes32;
 
 struct BetRequest {
-    // TODO: need contract address in request to avoid replay attacks on other contracts
+    /**
+     * The contract the request is meant for. To avoid replay attacks on other contract versions
+     */
+    address marketsContract;
     IERC20 token;
     uint96 amount;
     address from; // who is making the bet
