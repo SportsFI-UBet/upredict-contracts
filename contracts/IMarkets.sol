@@ -26,6 +26,12 @@ interface IMarkets {
     event MarketsFeesChanged(uint16 creatorFeeDecimal, uint16 operatorFeeDecimal);
 
     event MarketsBetPlaced(BetRequest request);
+    /**
+     * Exceptional event that should not occur if backend has no bugs
+     */
+    event MarketsBetWasPlacedAfterResult(
+        MarketCommitment indexed marketCommitment, RequestCommitment requestCommitment
+    );
     event MarketsResultRevealed(MarketCommitment indexed marketCommitment, ResultCommitment resultCommitment);
     event MarketsRefundIssued(
         RequestCommitment indexed requestCommitment,

@@ -929,6 +929,8 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Reveal carol's bet - it should just be a refund, no matter who won
         vm.assertEq(erc20.balanceOf(carol), 0, "Carol doesn't have any money");
+        vm.expectEmit(true, false, false, true);
+        emit IMarkets.MarketsBetWasPlacedAfterResult(marketContext.marketCommitment, carolBetContext.requestCommitment);
         markets.revealBet(marketContext.marketBlob, resultBlob, carolBetContext.request, carolBetContext.betBlob);
         vm.assertEq(erc20.balanceOf(carol), carolAmount, "Carol gets exact refund");
     }

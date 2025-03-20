@@ -292,6 +292,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             // was put in.
             winningPotAmount = request.amount;
             losingPotAmount = 0;
+            emit MarketsBetWasPlacedAfterResult(marketCommitment, requestCommitment);
         }
         if (losingPotAmount > 0) {
             // only charge fees on the losing pot, to discourage markets that
