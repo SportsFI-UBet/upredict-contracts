@@ -34,9 +34,10 @@ contract WeightedParimutuelMarkets is MarketsBase {
 
     struct ResultInfo {
         /**
-         * The outcome that should get part of the losing pot
+         * A bitmask with what outcome indices have won. Allows ties, and
+         * explicit refund results.
          */
-        uint256 winningOutcome;
+        uint256 winningOutcomeMask;
         /**
          * Sum of all collateral staked for losing outcome
          */
@@ -96,11 +97,14 @@ contract WeightedParimutuelMarkets is MarketsBase {
         require(marketInfo.deadlineBlock < block.number, MarketsResultTooEarly(marketCommitment, block.number));
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
+        // Prevent "everyone loses" result.
+        require(resultInfo.winningOutcomeMask > 0, MarketsInvalidResult(marketCommitment, resultCommitment));
+        // Prevent win mask being outside known outcome indices
         require(
-            resultInfo.winningOutcome < marketInfo.numOutcomes, MarketsInvalidResult(marketCommitment, resultCommitment)
+            resultInfo.winningOutcomeMask < (1 << marketInfo.numOutcomes),
+            MarketsInvalidResult(marketCommitment, resultCommitment)
         );
-        // TODO: how to ensure that no divide by zero, but also handle the case where there is no winner
-        // In a prediction market, if no-one bets on the winning result, noone gets the money?
+        // Prevent divide by 0
         require(resultInfo.winningTotalWeight > 0, MarketsInvalidResult(marketCommitment, resultCommitment));
     }
 
@@ -124,7 +128,8 @@ contract WeightedParimutuelMarkets is MarketsBase {
         marketDeadlineBlock = marketInfo.deadlineBlock;
 
         creator = abi.decode(marketBlob.data, (MarketInfo)).creator;
-        if (hiddenInfo.outcome == resultInfo.winningOutcome) {
+        uint256 betOutcomeMask = (1 << hiddenInfo.outcome);
+        if ((betOutcomeMask & resultInfo.winningOutcomeMask) != 0) {
             winningPotAmount = request.amount;
             losingPotAmount =
                 Math.mulDiv(hiddenInfo.betWeight, resultInfo.losingTotalPot, resultInfo.winningTotalWeight);
