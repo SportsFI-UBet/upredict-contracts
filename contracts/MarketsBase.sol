@@ -64,6 +64,11 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      */
     mapping(address => uint256) public userNonces;
 
+    /**
+     * Safeguard to prevent draining of excess collateral for a market
+     */
+    mapping(MarketCommitment => uint256) public availableLosingPot;
+
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
@@ -171,9 +176,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             MarketsInvalidResult(marketCommitment, resultCommitment)
         );
         // hook for implementation to verify that the result makes sense given all the bets
-        _verifyResult(marketCommitment, marketBlob, resultCommitment, resultBlob);
+        uint256 losingTotalPot = _verifyResult(marketCommitment, marketBlob, resultCommitment, resultBlob);
 
         marketResults[marketCommitment] = resultCommitment;
+        availableLosingPot[marketCommitment] = losingTotalPot;
 
         emit MarketsResultRevealed(marketCommitment, resultCommitment);
     }
@@ -252,8 +258,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         BetBlob calldata betBlob
     ) public returns (IERC20 token, address to, uint256 amount) {
         MarketCommitment marketCommitment = getCommitment(marketBlob);
+        ResultCommitment resultCommitment = getCommitment(resultBlob);
         {
-            ResultCommitment resultCommitment = getCommitment(resultBlob);
             ResultCommitment existingCommitment = marketResults[marketCommitment];
             require(
                 existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment)
@@ -292,6 +298,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             emit MarketsBetWasPlacedAfterResult(marketCommitment, requestCommitment);
         }
         if (losingPotAmount > 0) {
+            uint256 currentlyAvailable = availableLosingPot[marketCommitment];
+            require(currentlyAvailable >= losingPotAmount, MarketsInvalidResult(marketCommitment, resultCommitment));
+            availableLosingPot[marketCommitment] = currentlyAvailable - losingPotAmount;
+
             // only charge fees on the losing pot, to discourage markets that
             // are heavily imbalanced. If the losing pot is small (because it's
             // a very unlikely result), then creator fees are also small
@@ -335,14 +345,15 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         returns (uint256 winningPotAmount, uint256 losingPotAmount, uint256 marketDeadlineBlock, address creator);
 
     /**
-     * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong)
+     * Hook that raises an error if the result does not make sense (e.g. total potential payout amount is wrong).
+     * @return losingTotalPot total amount of collateral that can be distributed among winners
      */
     function _verifyResult(
         MarketCommitment marketCommitment,
         MarketBlob calldata marketBlob,
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
-    ) internal view virtual;
+    ) internal view virtual returns (uint256 losingTotalPot);
 
     /**
      * Hook to extract a marketCommitment from a result. Used to enforce that
