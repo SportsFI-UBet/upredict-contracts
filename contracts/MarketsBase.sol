@@ -4,8 +4,6 @@ pragma solidity ^0.8.28;
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import { Context } from "@openzeppelin/contracts/utils/Context.sol";
-import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import { AccessControl } from "@openzeppelin/contracts/access/AccessControl.sol";
 
 import { MarketsErrors } from "./MarketsErrors.sol";
@@ -19,12 +17,13 @@ import {
     MarketBlob,
     ResultBlob,
     BetBlob,
-    nullResultCommitment
+    nullResultCommitment,
+    getCommitment,
+    recoverAddress
 } from "./Commitments.sol";
 
 abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl {
     using SafeERC20 for IERC20;
-    using MessageHashUtils for bytes32;
 
     /**
      * Stored on the blockchain to reference during reveal phase
@@ -82,10 +81,9 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         require(_msgSender() == bet.from, MarketsWrongSender(_msgSender()));
         require(address(this) == bet.marketsContract, MarketsWrongContract(bet.marketsContract));
 
-        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(bet)));
+        RequestCommitment requestCommitment = getCommitment(bet);
 
-        address signerAddress =
-            ECDSA.recover(RequestCommitment.unwrap(requestCommitment).toEthSignedMessageHash(), requestSignature);
+        address signerAddress = recoverAddress(requestCommitment, requestSignature);
         _checkRole(BET_SIGNATURE_ROLE, signerAddress);
 
         // Check user nonce to avoid replay attacks
@@ -117,7 +115,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         external
         returns (IERC20 token, address to, uint256 amount)
     {
-        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
+        RequestCommitment requestCommitment = getCommitment(request);
         BetState storage betState = bets[requestCommitment];
         require(betState.amount == request.amount, MarketsBetDoesntExist(requestCommitment));
         betState.amount = 0;
@@ -150,10 +148,9 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         ResultBlob calldata resultBlob,
         bytes calldata resultSignature
     ) external {
-        MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
-        ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
-        address signerAddress =
-            ECDSA.recover(ResultCommitment.unwrap(resultCommitment).toEthSignedMessageHash(), resultSignature);
+        MarketCommitment marketCommitment = getCommitment(marketBlob);
+        ResultCommitment resultCommitment = getCommitment(resultBlob);
+        address signerAddress = recoverAddress(resultCommitment, resultSignature);
         _checkRole(RESULT_SIGNATURE_ROLE, signerAddress);
 
         ResultCommitment existingCommitment = marketResults[marketCommitment];
@@ -254,9 +251,9 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         BetRequest calldata request,
         BetBlob calldata betBlob
     ) public returns (IERC20 token, address to, uint256 amount) {
-        MarketCommitment marketCommitment = MarketCommitment.wrap(keccak256(marketBlob.data));
+        MarketCommitment marketCommitment = getCommitment(marketBlob);
         {
-            ResultCommitment resultCommitment = ResultCommitment.wrap(keccak256(resultBlob.data));
+            ResultCommitment resultCommitment = getCommitment(resultBlob);
             ResultCommitment existingCommitment = marketResults[marketCommitment];
             require(
                 existingCommitment == resultCommitment, MarketsInconsistentResult(marketCommitment, resultCommitment)
@@ -264,10 +261,10 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             require(marketCommitment == _getMarketFromBet(betBlob), MarketsInvalidRevealBet());
         }
 
-        RequestCommitment requestCommitment = RequestCommitment.wrap(keccak256(abi.encode(request)));
+        RequestCommitment requestCommitment = getCommitment(request);
         {
             BetState storage betState = bets[requestCommitment];
-            BetCommitment betCommitment = BetCommitment.wrap(keccak256(betBlob.data));
+            BetCommitment betCommitment = getCommitment(betBlob);
             require(
                 request.betCommitment == betCommitment,
                 MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
