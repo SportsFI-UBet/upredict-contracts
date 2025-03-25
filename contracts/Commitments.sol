@@ -2,6 +2,8 @@
 pragma solidity ^0.8.28;
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import { ECDSA } from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
  * Some implementation defined blob describing hidden info of a market. Struct is there for strong type safety.
@@ -18,6 +20,10 @@ struct MarketBlob {
 
 type MarketCommitment is bytes32;
 
+function getCommitment(MarketBlob calldata blob) pure returns (MarketCommitment) {
+    return MarketCommitment.wrap(keccak256(blob.data));
+}
+
 /**
  * Implementation defined blob for the market result, that can be used during
  * bet reveal to give user payout
@@ -30,6 +36,16 @@ type ResultCommitment is bytes32;
 
 ResultCommitment constant nullResultCommitment = ResultCommitment.wrap(bytes32(0));
 
+function getCommitment(ResultBlob calldata blob) pure returns (ResultCommitment) {
+    return ResultCommitment.wrap(keccak256(blob.data));
+}
+
+function recoverAddress(ResultCommitment resultCommitment, bytes calldata resultSignature) pure returns (address) {
+    return ECDSA.recover(
+        MessageHashUtils.toEthSignedMessageHash(ResultCommitment.unwrap(resultCommitment)), resultSignature
+    );
+}
+
 /**
  * Some implementation defined blob describing hidden info of bet
  */
@@ -38,6 +54,10 @@ struct BetBlob {
 }
 
 type BetCommitment is bytes32;
+
+function getCommitment(BetBlob calldata blob) pure returns (BetCommitment) {
+    return BetCommitment.wrap(keccak256(blob.data));
+}
 
 struct BetRequest {
     /**
@@ -64,6 +84,16 @@ struct BetRequest {
 }
 
 type RequestCommitment is bytes32;
+
+function getCommitment(BetRequest calldata request) pure returns (RequestCommitment) {
+    return RequestCommitment.wrap(keccak256(abi.encode(request)));
+}
+
+function recoverAddress(RequestCommitment requestCommitment, bytes calldata requestSignature) pure returns (address) {
+    return ECDSA.recover(
+        MessageHashUtils.toEthSignedMessageHash(RequestCommitment.unwrap(requestCommitment)), requestSignature
+    );
+}
 
 function requestCommitmentEq(RequestCommitment a, RequestCommitment b) pure returns (bool) {
     return RequestCommitment.unwrap(a) == RequestCommitment.unwrap(b);
