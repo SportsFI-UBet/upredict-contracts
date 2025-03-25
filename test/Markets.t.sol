@@ -790,6 +790,40 @@ contract MarketsTest is Test, DeployTestnet {
         markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
     }
 
+    function testRevealResultInvalidMarket() public {
+        // Cannot exceed 256 outcomes
+        MarketContext memory marketContext = makeMarketContext(0x42, 257);
+
+        WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+            winningOutcomeMask: 1,
+            losingTotalPot: 0,
+            winningTotalWeight: 1,
+            marketCommitment: marketContext.marketCommitment
+        });
+        (ResultBlob memory resultBlob,, bytes memory resultSignature) = prepareRevealResult(resultInfo);
+
+        vm.roll(marketDeadlineBlock + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsInvalidMarket.selector, marketContext.marketCommitment)
+        );
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+
+        // 0 outcomes should also fail
+        marketContext = makeMarketContext(0x23, 0);
+        resultInfo.marketCommitment = marketContext.marketCommitment;
+        (resultBlob,, resultSignature) = prepareRevealResult(resultInfo);
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsInvalidMarket.selector, marketContext.marketCommitment)
+        );
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+
+        // 256 outcomes should still work
+        marketContext = makeMarketContext(0x23, 256);
+        resultInfo.marketCommitment = marketContext.marketCommitment;
+        (resultBlob,, resultSignature) = prepareRevealResult(resultInfo);
+        markets.revealMarketResult(marketContext.marketBlob, resultBlob, resultSignature);
+    }
+
     function testRevealResultInvalidWinningTotalWeight() public {
         MarketContext memory marketContext = makeMarketContext();
 

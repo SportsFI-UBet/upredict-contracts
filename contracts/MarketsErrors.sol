@@ -14,6 +14,7 @@ interface MarketsErrors {
 
     error MarketsResultAlreadyRevealed(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
     error MarketsResultTooEarly(MarketCommitment marketCommitment, uint256 blockNumber);
+    error MarketsInvalidMarket(MarketCommitment marketCommitment);
     error MarketsInvalidResult(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
     error MarketsInvalidBetRequest(
         RequestCommitment requestCommmitment, BetCommitment expectedCommitment, BetCommitment invalidCommitment

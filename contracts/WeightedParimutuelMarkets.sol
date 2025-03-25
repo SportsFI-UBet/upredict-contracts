@@ -97,13 +97,16 @@ contract WeightedParimutuelMarkets is MarketsBase {
         require(marketInfo.deadlineBlock < block.number, MarketsResultTooEarly(marketCommitment, block.number));
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
+        // Cannot have more than 256 outcomes, so we can use bitmasks
+        require(marketInfo.numOutcomes > 0, MarketsInvalidMarket(marketCommitment));
+        require(marketInfo.numOutcomes < 257, MarketsInvalidMarket(marketCommitment));
         // Prevent "everyone loses" result.
         require(resultInfo.winningOutcomeMask > 0, MarketsInvalidResult(marketCommitment, resultCommitment));
-        // Prevent win mask being outside known outcome indices
-        require(
-            resultInfo.winningOutcomeMask < (1 << marketInfo.numOutcomes),
-            MarketsInvalidResult(marketCommitment, resultCommitment)
-        );
+        // Prevent win mask being outside known outcome indices.
+        // Weird bit-twiddling to account for 256 outcomes
+        uint256 fullMask = (1 << (marketInfo.numOutcomes - 1));
+        fullMask |= (fullMask - 1);
+        require(resultInfo.winningOutcomeMask <= (fullMask), MarketsInvalidResult(marketCommitment, resultCommitment));
         // Prevent divide by 0
         require(resultInfo.winningTotalWeight > 0, MarketsInvalidResult(marketCommitment, resultCommitment));
     }
