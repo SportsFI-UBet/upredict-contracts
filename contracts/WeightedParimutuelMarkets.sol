@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import { MarketsBase } from "./MarketsBase.sol";
@@ -92,11 +91,13 @@ contract WeightedParimutuelMarkets is MarketsBase {
         MarketBlob calldata marketBlob,
         ResultCommitment resultCommitment,
         ResultBlob calldata resultBlob
-    ) internal view override {
+    ) internal view override returns (uint256 losingTotalPot) {
         MarketInfo memory marketInfo = abi.decode(marketBlob.data, (MarketInfo));
         require(marketInfo.deadlineBlock < block.number, MarketsResultTooEarly(marketCommitment, block.number));
 
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
+        losingTotalPot = resultInfo.losingTotalPot;
+
         // Cannot have more than 256 outcomes, so we can use bitmasks
         require(marketInfo.numOutcomes > 0, MarketsInvalidMarket(marketCommitment));
         require(marketInfo.numOutcomes < 257, MarketsInvalidMarket(marketCommitment));
@@ -125,8 +126,6 @@ contract WeightedParimutuelMarkets is MarketsBase {
         MarketInfo memory marketInfo = abi.decode(marketBlob.data, (MarketInfo));
         BetHiddenInfo memory hiddenInfo = abi.decode(betBlob.data, (BetHiddenInfo));
         ResultInfo memory resultInfo = abi.decode(resultBlob.data, (ResultInfo));
-
-        // TODO: keep track of total betWeight used, so it does not exceed winningTotalWeight
 
         marketDeadlineBlock = marketInfo.deadlineBlock;
 

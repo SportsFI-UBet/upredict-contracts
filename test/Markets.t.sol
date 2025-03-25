@@ -1350,4 +1350,43 @@ contract MarketsTest is Test, DeployTestnet {
             markets.distributeOperatorFees(requests);
         }
     }
+
+    // A trusted backend may have bugs during result reveal. We can't fully fix
+    // mistakes, but have at least some sanity checks/barriers to prevent some
+    // modes of failure
+
+    function testBackendBugExcessWinningsFromLowTotalWeight(uint256 aliceAmount, uint256 bobAmount) public {
+        aliceAmount = bound(aliceAmount, 1000, type(uint96).max);
+        bobAmount = bound(bobAmount, 1000, type(uint96).max);
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Alice and bob bet
+        BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, bobAmount, 0, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        // Due to bad result, alice will get a larger payout than is available
+        (ResultBlob memory resultBlob, ResultCommitment resultCommitment,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
+                losingTotalPot: bobAmount,
+                winningTotalWeight: aliceAmount / 2, // undercount weight, so payout is too large
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        // Add enough collateral to contract, so we can technically cover the excess winnings
+        // In reality this would be equivalent to "stealing" winnings from other markets
+        erc20.mint(address(markets), aliceAmount / 2);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                MarketsErrors.MarketsInvalidResult.selector, marketContext.marketCommitment, resultCommitment
+            )
+        );
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+    }
 }
