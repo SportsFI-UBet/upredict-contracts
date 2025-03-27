@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import { Test } from "forge-std/Test.sol";
+import { Vm, Test } from "forge-std/Test.sol";
 
 import { IERC20, ERC20 } from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import { IAccessControl } from "@openzeppelin/contracts/access/IAccessControl.sol";
-import { ERC2771Forwarder } from "@openzeppelin/contracts/metatx/ERC2771Forwarder.sol";
 import { MessageHashUtils } from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import { Address } from "@openzeppelin/contracts/utils/Address.sol";
 
 import { DeployTestnet } from "../script/Deploy.s.sol";
 import { IMarkets } from "../contracts/IMarkets.sol";
@@ -23,60 +23,60 @@ import {
     ResultBlob,
     BetBlob
 } from "../contracts/Commitments.sol";
-import { WeightedParimutuelMarkets } from "../contracts/WeightedParimutuelMarkets.sol";
+import { WeightedParimutuelMarkets, MarketsBase } from "../contracts/WeightedParimutuelMarkets.sol";
+import { TestERC20 } from "../contracts/testnet/Token.sol";
 
-/// @dev Adapted from guide on testing EIP712 signatures for foundry:
-/// https://book.getfoundry.sh/tutorials/testing-eip712?highlight=712#testing-eip-712-signatures
-contract SigUtils {
-    struct Permit {
-        address owner;
-        address spender;
-        uint256 value;
-        uint256 nonce;
-        uint256 deadline;
+/**
+ * Malicious ERC20 that executes another call on transfer
+ */
+contract ReentryERC20 is TestERC20 {
+    using Address for address;
+
+    struct ReentryParams {
+        /**
+         * What address triggers the re-entry
+         */
+        address senderTrigger;
+        /**
+         * Which address would we re-enter through. For tests this is simulated
+         * through "vm.prank" but in real world this would mean the pretend address
+         * has to be another malicious contract.
+         */
+        address newSenderAddress;
+        /**
+         * The contract that will be called for re-entry
+         */
+        address contractAddress;
+        /**
+         * What call to make on the contract
+         */
+        bytes call;
+        Vm vm;
     }
 
-    // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
-    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
-    bytes32 public constant FORWARD_REQUEST_TYPEHASH = keccak256(
-        "ForwardRequest(address from,address to,uint256 value,uint256 gas,uint256 nonce,uint48 deadline,bytes data)"
-    );
+    /**
+     * State that makes sure we only attempt re-entry once
+     */
+    bool public hasReentered;
+    ReentryParams public params;
 
-    bytes32 internal domainSeparator;
-
-    constructor(bytes32 _domainSeparator) {
-        domainSeparator = _domainSeparator;
+    constructor() {
+        hasReentered = true;
     }
 
-    // computes the hash of the fully encoded EIP-712 message for the domain, which can be used to recover the signer
-    function getTypedDataHash(bytes32 structHash) public view returns (bytes32) {
-        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+    function setParams(ReentryParams memory params_) external {
+        hasReentered = false;
+        params = params_;
     }
 
-    // computes the hash of a permit
-    function getStructHash(Permit memory _permit) public pure returns (bytes32) {
-        return keccak256(
-            abi.encode(PERMIT_TYPEHASH, _permit.owner, _permit.spender, _permit.value, _permit.nonce, _permit.deadline)
-        );
-    }
-
-    function getStructHash(ERC2771Forwarder.ForwardRequestData memory request, uint256 nonce)
-        public
-        pure
-        returns (bytes32)
-    {
-        return keccak256(
-            abi.encode(
-                FORWARD_REQUEST_TYPEHASH,
-                request.from,
-                request.to,
-                request.value,
-                request.gas,
-                nonce,
-                request.deadline,
-                keccak256(request.data)
-            )
-        );
+    function _update(address from, address to, uint256 value) internal override {
+        ERC20._update(from, to, value);
+        // execute re-entrancy
+        if (_msgSender() == params.senderTrigger && !hasReentered) {
+            hasReentered = true;
+            params.vm.prank(params.newSenderAddress);
+            params.contractAddress.functionCall(params.call);
+        }
     }
 }
 
@@ -1388,5 +1388,72 @@ contract MarketsTest is Test, DeployTestnet {
             )
         );
         markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testDistributeOperatorFeesReentrancy() public {
+        // Try to take operator fees twice. This relies on a convoluted sequence
+        // that most likely cannot occur in reality.  distributeOperatorFees is
+        // called, and during the call to transfer the erc20 re-enters back into
+        // distributeOperatorFees.
+        // This means distributor account has to be a smart contract for it to be called
+        // from the erc20. It will typically be an EOA.
+        ReentryERC20 badErc20 = new ReentryERC20();
+        erc20 = badErc20;
+
+        uint256 operatorFeesDecimal = markets.FEE_DIVISOR() / 10; // 10% fees for simple math
+        uint256 betAmount = 100;
+        uint256 expectedOperatorFees = 10;
+        vm.prank(admin);
+        markets.setFees(uint16(0), uint16(operatorFeesDecimal));
+
+        // place bets, do all reveals to get some operator fees
+        {
+            MarketContext memory marketContext = makeMarketContext();
+
+            BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
+            placeBet(alice, aliceBetContext.request);
+            BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
+            placeBet(bob, bobBetContext.request);
+
+            WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
+                losingTotalPot: betAmount,
+                winningTotalWeight: betAmount,
+                marketCommitment: marketContext.marketCommitment
+            });
+            (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
+
+            markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+            vm.assertEq(markets.operatorFees(erc20), expectedOperatorFees, "Operator fee");
+        }
+
+        // Do re-entrant fee distribution
+        IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
+        requests[0] =
+            IMarkets.FeeDistributionRequest({ token: badErc20, users: new address[](1), amounts: new uint256[](1) });
+        requests[0].users[0] = carol; // carol expects to get double the fees
+        requests[0].amounts[0] = expectedOperatorFees;
+
+        // Set up re-entrancy call
+        bytes memory call = abi.encodeWithSelector(MarketsBase.distributeOperatorFees.selector, (requests));
+        badErc20.setParams(
+            ReentryERC20.ReentryParams({
+                senderTrigger: address(markets),
+                newSenderAddress: operatorFeeDistributor,
+                contractAddress: address(markets),
+                call: call,
+                vm: vm
+            })
+        );
+
+        // Make sure there is extra collateral for re-entrancy to try and steal
+        badErc20.mint(address(markets), expectedOperatorFees);
+
+        // We should revert
+        vm.expectRevert(
+            abi.encodeWithSelector(MarketsErrors.MarketsNotEnoughOperatorFees.selector, erc20, 0, expectedOperatorFees)
+        );
+        vm.prank(operatorFeeDistributor);
+        markets.distributeOperatorFees(requests);
     }
 }
