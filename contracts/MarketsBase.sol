@@ -30,6 +30,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
      */
     struct BetState {
         uint96 amount;
+        uint16 creatorFeeDecimal;
+        uint16 operatorFeeDecimal;
     }
 
     /**
@@ -94,6 +96,8 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         // Check user nonce to avoid replay attacks
         uint256 expectedNonce = userNonces[bet.from];
         require(bet.nonce == expectedNonce, MarketsInvalidUserNonce(bet.from, expectedNonce, bet.nonce));
+        // Prevent bets with 0 amount, as that prevents marking them as redeemed
+        require(bet.amount > 0, MarketsInvalidBetAmount(bet.amount));
 
         require(
             block.number < bet.submissionDeadlineBlock,
@@ -105,7 +109,12 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         // It should not be possible to have bet with the same bet commitment entered already.
         // The commitment includes the nonce, which prevents replay attacks.
         assert(bets[requestCommitment].amount == 0);
-        bets[requestCommitment] = BetState({ amount: bet.amount });
+        // Store current fees that will be used during bet reveal
+        bets[requestCommitment] = BetState({
+            amount: bet.amount,
+            creatorFeeDecimal: creatorFeeDecimal,
+            operatorFeeDecimal: operatorFeeDecimal
+        });
         userNonces[bet.from]++;
 
         bet.token.safeTransferFrom(_msgSender(), address(this), bet.amount);
@@ -121,7 +130,15 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
         returns (IERC20 token, address to, uint256 amount)
     {
         RequestCommitment requestCommitment = getCommitment(request);
+        BetCommitment betCommitment = getCommitment(betBlob);
         BetState storage betState = bets[requestCommitment];
+        // Fake requests with amount of 0 don't pose a risk since a refund of 0
+        // is harmless, but enforce anyway to be consistent
+        require(request.amount > 0, MarketsInvalidBetAmount(request.amount));
+        require(
+            request.betCommitment == betCommitment,
+            MarketsInvalidBetRequest(requestCommitment, request.betCommitment, betCommitment)
+        );
         require(betState.amount == request.amount, MarketsBetDoesntExist(requestCommitment));
         betState.amount = 0;
 
@@ -275,6 +292,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
                 request.betCommitment == betCommitment,
                 MarketsInvalidBetRequest(requestCommitment, betCommitment, request.betCommitment)
             );
+            require(request.amount > 0, MarketsInvalidBetAmount(request.amount));
             require(betState.amount == request.amount, MarketsBetDoesntExist(requestCommitment));
 
             // Since the bet is revealed, no amount should remain to be revealed
@@ -298,15 +316,18 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             emit MarketsBetWasPlacedAfterResult(marketCommitment, requestCommitment);
         }
         if (losingPotAmount > 0) {
-            uint256 currentlyAvailable = availableLosingPot[marketCommitment];
-            require(currentlyAvailable >= losingPotAmount, MarketsInvalidResult(marketCommitment, resultCommitment));
-            availableLosingPot[marketCommitment] = currentlyAvailable - losingPotAmount;
+            {
+                uint256 currentlyAvailable = availableLosingPot[marketCommitment];
+                require(currentlyAvailable >= losingPotAmount, MarketsInvalidResult(marketCommitment, resultCommitment));
+                availableLosingPot[marketCommitment] = currentlyAvailable - losingPotAmount;
+            }
 
-            // only charge fees on the losing pot, to discourage markets that
+            // Only charge fees on the losing pot, to discourage markets that
             // are heavily imbalanced. If the losing pot is small (because it's
             // a very unlikely result), then creator fees are also small
-            uint256 creatorFee = (creatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
-            uint256 operatorFee = (operatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
+            // Use stored fees from when the bet was placed
+            uint256 creatorFee = (bets[requestCommitment].creatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
+            uint256 operatorFee = (bets[requestCommitment].operatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
             creatorFees[token][creator] += creatorFee;
             operatorFees[token] += operatorFee;
             emit MarketsBetFeeCollected(marketCommitment, token, creator, creatorFee, operatorFee);

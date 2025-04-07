@@ -21,7 +21,8 @@ import {
     BetCommitment,
     MarketBlob,
     ResultBlob,
-    BetBlob
+    BetBlob,
+    getCommitment
 } from "../contracts/Commitments.sol";
 import { WeightedParimutuelMarkets, MarketsBase } from "../contracts/WeightedParimutuelMarkets.sol";
 import { TestERC20 } from "../contracts/testnet/Token.sol";
@@ -309,7 +310,7 @@ contract MarketsTest is Test, DeployTestnet {
     }
 
     function testBetLimits(uint256 lowerLimit, uint256 upperLimit) public {
-        lowerLimit = bound(lowerLimit, 1, type(uint96).max - 1);
+        lowerLimit = bound(lowerLimit, 2, type(uint96).max - 1);
         upperLimit = bound(upperLimit, lowerLimit, type(uint96).max - 1);
         MarketContext memory marketContext = makeMarketContext();
 
@@ -488,6 +489,18 @@ contract MarketsTest is Test, DeployTestnet {
         markets.placeBet(aliceBetContext.request, signature);
     }
 
+    function testZeroAmountBet() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare alice to bet
+        BetContext memory aliceBetContext = makeBetContext(alice, 0, 1, 0, marketContext.marketCommitment);
+        bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
+
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidBetAmount.selector, 0));
+        vm.prank(alice);
+        markets.placeBet(aliceBetContext.request, signature);
+    }
+
     function testWrongContract() public {
         MarketContext memory marketContext = makeMarketContext();
 
@@ -613,6 +626,18 @@ contract MarketsTest is Test, DeployTestnet {
         vm.expectRevert(
             abi.encodeWithSelector(MarketsErrors.MarketsBetDoesntExist.selector, aliceBetContext.requestCommitment)
         );
+        markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
+    }
+
+    function testRefundBetZeroAmount() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        uint256 betAmount = 0;
+        BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 1, 0, marketContext.marketCommitment);
+
+        // Bet doesn't exist
+        vm.roll(refundStartBlock);
+        vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidBetAmount.selector, 0));
         markets.requestRefund(aliceBetContext.request, aliceBetContext.betBlob);
     }
 
@@ -1490,11 +1515,19 @@ contract MarketsTest is Test, DeployTestnet {
             betInfo.marketCommitment = fakeMarket;
             BetBlob memory fakeBetBlob = BetBlob({ data: abi.encode(betInfo) });
 
-            // Give some tokens to markets contract which will be extracted
+            // Give some tokens to markets contract which could be extracted
             erc20.mint(address(markets), betAmount);
 
             // Contract should check the bet blob matches the request
             vm.roll(refundStartBlock);
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    MarketsErrors.MarketsInvalidBetRequest.selector,
+                    bobBetContext.requestCommitment,
+                    bobBetContext.request.betCommitment,
+                    getCommitment(fakeBetBlob)
+                )
+            );
             markets.requestRefund(bobBetContext.request, fakeBetBlob);
         }
     }
@@ -1524,13 +1557,13 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Carol reveals fake bet to steal the whole losingPot
         {
-            // Since winningTotalWeight is 1, we can make betWeight consume all funds in the contract
             uint256 weight = betAmount;
             BetContext memory carolBetContext = makeBetContext(carol, 0, 0, 0, marketContext.marketCommitment, weight);
+            vm.expectRevert(abi.encodeWithSelector(MarketsErrors.MarketsInvalidBetAmount.selector, 0));
             markets.revealBet(marketContext.marketBlob, resultBlob, carolBetContext.request, carolBetContext.betBlob);
         }
-        vm.assertEq(erc20.balanceOf(carol), betAmount, "Carol stole losingPot");
-        vm.assertEq(erc20.balanceOf(address(markets)), betAmount, "Only half the money remains");
+        vm.assertEq(erc20.balanceOf(carol), 0, "Carol did not steal losingPot");
+        vm.assertEq(erc20.balanceOf(address(markets)), betAmount * 2, "Markets still has all the money");
     }
 
     function testAuditM01FeesChangeRetroactively(uint256 creatorFeesDecimal, uint256 operatorFeesDecimal) public {
@@ -1547,6 +1580,10 @@ contract MarketsTest is Test, DeployTestnet {
         BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
         placeBet(bob, bobBetContext.request);
 
+        // Set fees after bet placement
+        vm.prank(admin);
+        markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
+
         ResultBlob memory resultBlob;
         {
             WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1558,13 +1595,10 @@ contract MarketsTest is Test, DeployTestnet {
             (resultBlob,,) = revealResult(marketContext, resultInfo);
         }
 
-        // Set fees before reveal
-        vm.prank(admin);
-        markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
-
         markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
 
-        vm.assertGt(markets.operatorFees(erc20), 0, "Operator fees");
-        vm.assertGt(markets.creatorFees(erc20, address(creator)), 0, "Creator fees");
+        // No fees should be taken retroactively
+        vm.assertEq(markets.operatorFees(erc20), 0, "Operator fees");
+        vm.assertEq(markets.creatorFees(erc20, address(creator)), 0, "Creator fees");
     }
 }
