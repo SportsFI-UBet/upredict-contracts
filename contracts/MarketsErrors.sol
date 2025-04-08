@@ -11,6 +11,7 @@ interface MarketsErrors {
     error MarketsInvalidUserNonce(address user, uint256 expectedNonce, uint256 nonce);
     error MarketsSubmissionTooLate(uint256 submissionDeadline, uint256 currentBlock);
     error MarketsRefundTooEarly(RequestCommitment requestCommitment, uint256 refundStartBlock, uint256 currentBlock);
+    error MarketsInvalidBetAmount(uint256 amount);
 
     error MarketsResultAlreadyRevealed(MarketCommitment marketCommitment, ResultCommitment resultCommitment);
     error MarketsResultTooEarly(MarketCommitment marketCommitment, uint256 blockNumber);

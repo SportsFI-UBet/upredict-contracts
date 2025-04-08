@@ -20,7 +20,7 @@ struct MarketBlob {
 
 type MarketCommitment is bytes32;
 
-function getCommitment(MarketBlob calldata blob) pure returns (MarketCommitment) {
+function getCommitment(MarketBlob memory blob) pure returns (MarketCommitment) {
     return MarketCommitment.wrap(keccak256(blob.data));
 }
 
@@ -36,7 +36,7 @@ type ResultCommitment is bytes32;
 
 ResultCommitment constant nullResultCommitment = ResultCommitment.wrap(bytes32(0));
 
-function getCommitment(ResultBlob calldata blob) pure returns (ResultCommitment) {
+function getCommitment(ResultBlob memory blob) pure returns (ResultCommitment) {
     return ResultCommitment.wrap(keccak256(blob.data));
 }
 
@@ -55,7 +55,7 @@ struct BetBlob {
 
 type BetCommitment is bytes32;
 
-function getCommitment(BetBlob calldata blob) pure returns (BetCommitment) {
+function getCommitment(BetBlob memory blob) pure returns (BetCommitment) {
     return BetCommitment.wrap(keccak256(blob.data));
 }
 
@@ -85,7 +85,7 @@ struct BetRequest {
 
 type RequestCommitment is bytes32;
 
-function getCommitment(BetRequest calldata request) pure returns (RequestCommitment) {
+function getCommitment(BetRequest memory request) pure returns (RequestCommitment) {
     return RequestCommitment.wrap(keccak256(abi.encode(request)));
 }
 
