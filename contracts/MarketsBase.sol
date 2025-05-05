@@ -330,7 +330,9 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             uint256 operatorFee = (bets[requestCommitment].operatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
             creatorFees[token][creator] += creatorFee;
             operatorFees[token] += operatorFee;
-            emit MarketsBetFeeCollected(marketCommitment, token, creator, creatorFee, operatorFee);
+            emit MarketsBetFeeCollectedWithRequest(
+                requestCommitment, marketCommitment, token, creator, creatorFee, operatorFee
+            );
             losingPotAmount -= (creatorFee + operatorFee);
         }
 

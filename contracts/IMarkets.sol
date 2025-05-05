@@ -47,7 +47,21 @@ interface IMarkets {
         address indexed user,
         uint256 payout
     );
+    /**
+     * Fees collected from a bet redeem. This event is DEPRECATED because it is missing the requestCommitment
+     */
     event MarketsBetFeeCollected(
+        MarketCommitment indexed marketCommitment,
+        IERC20 indexed token,
+        address indexed creator,
+        uint256 creatorFee,
+        uint256 operatorFee
+    );
+    /**
+     * Fees collected from a bet redeem.
+     */
+    event MarketsBetFeeCollectedWithRequest(
+        RequestCommitment requestCommitment,
         MarketCommitment indexed marketCommitment,
         IERC20 indexed token,
         address indexed creator,
