@@ -57,12 +57,30 @@ contract Deploy is DeployBase {
 contract DeployTestnet is Deploy {
     TestERC20 public erc20;
 
-    function setUpContracts(address admin) internal override {
+    function setUpContracts(address admin) internal virtual override {
         Deploy.setUpContracts(admin);
 
         {
             address implementation = setUpContract("TestERC20", "", "", false);
             erc20 = TestERC20(implementation);
+        }
+    }
+}
+
+contract DeployLocalTestnet is DeployTestnet {
+    /**
+     * Another instance of markets to test more than one instance
+     */
+    WeightedParimutuelMarkets public otherMarkets;
+
+    function setUpContracts(address admin) internal override {
+        DeployTestnet.setUpContracts(admin);
+
+        {
+            bytes memory constructorArgs = abi.encode(admin);
+            address implementation =
+                setUpContract("WeightedParimutuelMarkets", constructorArgs, "WeightedParimutuelMarkets2", false);
+            otherMarkets = WeightedParimutuelMarkets(implementation);
         }
     }
 }
