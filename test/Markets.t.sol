@@ -1262,7 +1262,9 @@ contract MarketsTest is Test, DeployTestnet {
         uint256 operatorFee = operatorFeesDecimal * bobBetContext.request.amount / markets.FEE_DIVISOR();
         uint256 aliceAmount = totalBetAmount - creatorFee - operatorFee;
         vm.expectEmit(true, true, true, true);
-        emit IMarkets.MarketsBetFeeCollected(marketContext.marketCommitment, erc20, creator, creatorFee, operatorFee);
+        emit IMarkets.MarketsBetFeeCollectedWithRequest(
+            aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, creator, creatorFee, operatorFee
+        );
         vm.expectEmit(true, true, true, true);
         emit IMarkets.MarketsBetRevealed(
             aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, alice, aliceAmount
