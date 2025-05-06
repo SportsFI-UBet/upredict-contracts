@@ -25,7 +25,20 @@ interface IMarkets {
 
     event MarketsFeesChanged(uint16 creatorFeeDecimal, uint16 operatorFeeDecimal);
 
+    /**
+     * DEPRECATED because of missing fees
+     */
     event MarketsBetPlaced(BetRequest request);
+    /**
+     * Logs the bet request along with the locked-in fees that will be charged on redemption
+     */
+    event MarketsBetPlacedV2(
+        RequestCommitment indexed requestCommitment,
+        BetRequest request,
+        uint16 creatorFeeDecimal,
+        uint16 operatorFeeDecimal
+    );
+
     /**
      * Exceptional event that should not occur if backend has no bugs
      */
@@ -60,7 +73,7 @@ interface IMarkets {
     /**
      * Fees collected from a bet redeem.
      */
-    event MarketsBetFeeCollectedWithRequest(
+    event MarketsBetFeeCollectedV2(
         RequestCommitment requestCommitment,
         MarketCommitment indexed marketCommitment,
         IERC20 indexed token,
@@ -68,6 +81,15 @@ interface IMarkets {
         uint256 creatorFee,
         uint256 operatorFee
     );
+
+    /**
+     * A creator has withdrawn all their fees for a token
+     */
+    event MarketsCreatorFeeWithdrawn(IERC20 indexed token, address indexed creator, uint256 amount);
+    /**
+     * The operator has distributed some fees to users
+     */
+    event MarketsOperatorFeeDistributed(IERC20 indexed token, address[] users, uint256[] amounts);
 
     /**
      * Place a bet according to the request, signed offchain by the backend.

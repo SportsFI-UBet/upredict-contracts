@@ -117,9 +117,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         DeployTestnet.setUpContracts(admin);
 
-        submissionDeadlineBlock = block.number + 100;
-        marketDeadlineBlock = block.number + 1000;
-        refundStartBlock = marketDeadlineBlock + 1000;
+        resetDeadlines();
 
         // Set up permissions
         bytes32 role = markets.RESULT_SIGNATURE_ROLE();
@@ -133,6 +131,12 @@ contract MarketsTest is Test, DeployTestnet {
         role = markets.OPERATOR_FEE_DISTRIBUTOR_ROLE();
         vm.prank(admin);
         markets.grantRole(role, operatorFeeDistributor);
+    }
+
+    function resetDeadlines() public {
+        submissionDeadlineBlock = block.number + 100;
+        marketDeadlineBlock = block.number + 1000;
+        refundStartBlock = marketDeadlineBlock + 1000;
     }
 
     function signCommitment(uint256 privateKey, bytes32 commitment) public pure returns (bytes memory sig) {
@@ -162,9 +166,12 @@ contract MarketsTest is Test, DeployTestnet {
 
     function placeBet(address user, BetRequest memory request) public {
         bytes memory signature = preparePlaceBet(user, request);
+        RequestCommitment requestCommitment = getCommitment(request);
+        uint16 creatorFeeDecimal = markets.creatorFeeDecimal();
+        uint16 operatorFeeDecimal = markets.operatorFeeDecimal();
 
         vm.expectEmit(false, false, false, true);
-        emit IMarkets.MarketsBetPlaced(request);
+        emit IMarkets.MarketsBetPlacedV2(requestCommitment, request, creatorFeeDecimal, operatorFeeDecimal);
         vm.prank(user);
         markets.placeBet(request, signature);
     }
@@ -1262,7 +1269,7 @@ contract MarketsTest is Test, DeployTestnet {
         uint256 operatorFee = operatorFeesDecimal * bobBetContext.request.amount / markets.FEE_DIVISOR();
         uint256 aliceAmount = totalBetAmount - creatorFee - operatorFee;
         vm.expectEmit(true, true, true, true);
-        emit IMarkets.MarketsBetFeeCollectedWithRequest(
+        emit IMarkets.MarketsBetFeeCollectedV2(
             aliceBetContext.requestCommitment, marketContext.marketCommitment, erc20, creator, creatorFee, operatorFee
         );
         vm.expectEmit(true, true, true, true);
@@ -1301,6 +1308,98 @@ contract MarketsTest is Test, DeployTestnet {
 
             vm.assertEq(erc20.balanceOf(address(bob)), requests[0].amounts[0], "Bob operator fee");
             vm.assertEq(erc20.balanceOf(address(carol)), requests[0].amounts[1], "Carol operator fee");
+        }
+
+        vm.assertEq(erc20.balanceOf(address(markets)), 0, "All collateral distributed");
+    }
+
+    function testBatchFeeWithdrawal(uint256 creatorFeesDecimal, uint256 operatorFeesDecimal) public {
+        creatorFeesDecimal = bound(creatorFeesDecimal, 0, 3e3);
+        operatorFeesDecimal = bound(operatorFeesDecimal, 0, 3e3);
+
+        vm.prank(admin);
+        markets.setFees(uint16(creatorFeesDecimal), uint16(operatorFeesDecimal));
+
+        uint256 numMarkets = 10;
+        address[] memory creators = new address[](numMarkets);
+        for (uint256 i = 0; i < numMarkets; i++) {
+            creators[i] = vm.addr(uint256(keccak256(abi.encode(i))));
+        }
+        uint256 winningAmount = 10e18;
+        uint256 losingAmount = 20e18;
+
+        uint256 creatorFee = creatorFeesDecimal * losingAmount / markets.FEE_DIVISOR();
+        uint256 operatorFee = operatorFeesDecimal * losingAmount / markets.FEE_DIVISOR();
+
+        for (uint256 i = 0; i < numMarkets; i++) {
+            resetDeadlines();
+            creator = creators[i];
+
+            MarketContext memory marketContext = makeMarketContext(i + 1, 2);
+
+            // Alice and bob bet
+            BetContext memory aliceBetContext =
+                makeBetContext(alice, winningAmount, 1, i, marketContext.marketCommitment);
+            placeBet(alice, aliceBetContext.request);
+
+            BetContext memory bobBetContext = makeBetContext(bob, losingAmount, 0, i, marketContext.marketCommitment);
+            placeBet(bob, bobBetContext.request);
+
+            // Reveal market result
+            (ResultBlob memory resultBlob,,) = revealResult(
+                marketContext,
+                WeightedParimutuelMarkets.ResultInfo({
+                    winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome, // alice should win
+                    losingTotalPot: bobBetContext.request.amount,
+                    winningTotalWeight: aliceBetContext.betInfo.betWeight,
+                    marketCommitment: marketContext.marketCommitment
+                })
+            );
+
+            // Reveal each bet. Alice should get back the whole pot, fees should come out of that
+            markets.revealBet(marketContext.marketBlob, resultBlob, bobBetContext.request, bobBetContext.betBlob);
+            markets.revealBet(marketContext.marketBlob, resultBlob, aliceBetContext.request, aliceBetContext.betBlob);
+            vm.assertEq(
+                erc20.balanceOf(address(markets)), (creatorFee + operatorFee) * (i + 1), "Only fees remain in markets"
+            );
+        }
+
+        // withdraw creator fee
+        {
+            IERC20[] memory tokens = new IERC20[](1);
+            tokens[0] = erc20;
+            if (creatorFee > 0) {
+                for (uint256 i = 0; i < numMarkets; i++) {
+                    vm.expectEmit(true, true, false, true);
+                    emit IMarkets.MarketsCreatorFeeWithdrawn(erc20, creators[i], creatorFee);
+                }
+            }
+            markets.withdrawCreatorFees(tokens, creators);
+
+            for (uint256 i = 0; i < numMarkets; i++) {
+                vm.assertEq(erc20.balanceOf(address(creators[i])), creatorFee, "Creator got their fee");
+            }
+        }
+
+        // distribute operator fee to creators again
+        {
+            IMarkets.FeeDistributionRequest[] memory requests = new IMarkets.FeeDistributionRequest[](1);
+            requests[0] =
+                IMarkets.FeeDistributionRequest({ token: erc20, users: creators, amounts: new uint256[](numMarkets) });
+            for (uint256 i = 0; i < numMarkets; i++) {
+                requests[0].amounts[i] = operatorFee;
+            }
+            vm.expectEmit(true, false, false, true);
+            emit IMarkets.MarketsOperatorFeeDistributed(erc20, creators, requests[0].amounts);
+
+            vm.prank(operatorFeeDistributor);
+            markets.distributeOperatorFees(requests);
+
+            for (uint256 i = 0; i < numMarkets; i++) {
+                vm.assertEq(
+                    erc20.balanceOf(address(creators[i])), creatorFee + operatorFee, "Operator fees distributed"
+                );
+            }
         }
 
         vm.assertEq(erc20.balanceOf(address(markets)), 0, "All collateral distributed");
