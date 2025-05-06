@@ -119,7 +119,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
 
         bet.token.safeTransferFrom(_msgSender(), address(this), bet.amount);
 
-        emit MarketsBetPlaced(bet);
+        emit MarketsBetPlacedV2(requestCommitment, bet, creatorFeeDecimal, operatorFeeDecimal);
     }
 
     /**
@@ -231,6 +231,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
                 if (amount > 0) {
                     tokenFees[user] = 0;
                     token.safeTransfer(user, amount);
+                    emit MarketsCreatorFeeWithdrawn(token, user, amount);
                 }
             }
         }
@@ -252,6 +253,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
                 totalTaken += amount;
                 token.safeTransfer(user, amount);
             }
+            emit MarketsOperatorFeeDistributed(token, request.users, request.amounts);
 
             // Regarding re-entrancy - this function can only be called by a Fee
             // Distributor, so a re-entrancy would have to go through a
@@ -330,9 +332,7 @@ abstract contract MarketsBase is IMarkets, Context, MarketsErrors, AccessControl
             uint256 operatorFee = (bets[requestCommitment].operatorFeeDecimal * losingPotAmount) / FEE_DIVISOR;
             creatorFees[token][creator] += creatorFee;
             operatorFees[token] += operatorFee;
-            emit MarketsBetFeeCollectedWithRequest(
-                requestCommitment, marketCommitment, token, creator, creatorFee, operatorFee
-            );
+            emit MarketsBetFeeCollectedV2(requestCommitment, marketCommitment, token, creator, creatorFee, operatorFee);
             losingPotAmount -= (creatorFee + operatorFee);
         }
 
