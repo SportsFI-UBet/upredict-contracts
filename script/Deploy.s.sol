@@ -27,7 +27,7 @@ abstract contract DeployBase is OpenZeppelinDeployments {
     function run() external virtual {
         address admin = vm.envAddress(ADMIN_ADDRESS);
 
-        mainnetConfirmation = 1747062347;
+        mainnetConfirmation = 1750710033;
 
         startBroadcastIfNotDryRun();
 
