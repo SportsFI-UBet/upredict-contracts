@@ -164,7 +164,8 @@ contract MarketsTest is Test, DeployTestnet {
         signature = signRequest(request);
     }
 
-    function placeBet(address user, BetRequest memory request) public {
+    function placeBet(BetRequest memory request) public {
+        address user = request.from;
         bytes memory signature = preparePlaceBet(user, request);
         RequestCommitment requestCommitment = getCommitment(request);
         uint16 creatorFeeDecimal = markets.creatorFeeDecimal();
@@ -277,13 +278,13 @@ contract MarketsTest is Test, DeployTestnet {
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
 
         // Approve erc20 and make bet
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
         vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
 
         // Prepare bob to bet
         BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
 
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
         vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
 
         // Reveal market result
@@ -373,6 +374,62 @@ contract MarketsTest is Test, DeployTestnet {
         markets.placeBet(aliceBetContext.request, signRequestCommitment(aliceBetContext.requestCommitment));
     }
 
+    function testPayoutCalculation() public {
+        MarketContext memory marketContext = makeMarketContext();
+
+        // Prepare 3 winning bets and one losing bet
+        uint256 amount = 1000;
+        BetContext[] memory betContexts = new BetContext[](4);
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 nonce = i;
+            betContexts[i] = makeBetContext(alice, amount, 1, nonce, marketContext.marketCommitment);
+        }
+        betContexts[3] = makeBetContext(bob, amount, 0, 0, marketContext.marketCommitment);
+
+        // Make bets
+        uint16[] memory fees = new uint16[](4);
+        fees[0] = 500;
+        fees[1] = 1000;
+        fees[2] = 1500;
+        fees[3] = 2000;
+        for (uint256 i = 0; i < betContexts.length; i++) {
+            vm.prank(admin);
+            markets.setFees(fees[i], fees[i]);
+            placeBet(betContexts[i].request);
+        }
+
+        // Reveal market result
+        (ResultBlob memory resultBlob,,) = revealResult(
+            marketContext,
+            WeightedParimutuelMarkets.ResultInfo({
+                winningOutcomeMask: 1 << betContexts[0].betInfo.outcome, // alice should win
+                losingTotalPot: amount,
+                winningTotalWeight: amount * 3,
+                marketCommitment: marketContext.marketCommitment
+            })
+        );
+
+        uint256 losingPotPerBet = amount / 3;
+        uint256[] memory expectedPayouts = new uint256[](4);
+        uint256 totalFees = 0;
+        for (uint256 i = 0; i < 3; i++) {
+            uint256 fee = ((losingPotPerBet * fees[i]) / markets.FEE_DIVISOR()) * 2;
+            totalFees += fee;
+            expectedPayouts[i] = amount + losingPotPerBet - fee;
+        }
+        assertEq(expectedPayouts[0], 1331);
+        assertEq(expectedPayouts[1], 1327);
+        assertEq(expectedPayouts[2], 1325);
+
+        for (uint256 i = 0; i < betContexts.length; i++) {
+            (,, uint256 payout) =
+                markets.revealBet(marketContext.marketBlob, resultBlob, betContexts[i].request, betContexts[i].betBlob);
+            assertEq(payout, expectedPayouts[i], "Winners should get a third less fees");
+        }
+
+        assertEq(erc20.balanceOf(address(markets)), 1 + totalFees, "Leftover token in contract due to truncation");
+    }
+
     function testEndToEndWeighted() public {
         MarketContext memory marketContext = makeMarketContext();
 
@@ -380,18 +437,18 @@ contract MarketsTest is Test, DeployTestnet {
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment, 3);
 
         // Approve erc20 and make bet
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
         vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
 
         // Bob bets, weight of 2
         BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment, 2);
 
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
         vm.assertEq(erc20.balanceOf(bob), 0, "Amount taken for bet");
 
         // Carol bets, weight of 1
         BetContext memory carolBetContext = makeBetContext(carol, 10e18, 1, 0, marketContext.marketCommitment, 1);
-        placeBet(carol, carolBetContext.request);
+        placeBet(carolBetContext.request);
 
         // Reveal market result
         (ResultBlob memory resultBlob,,) = revealResult(
@@ -441,7 +498,7 @@ contract MarketsTest is Test, DeployTestnet {
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
 
         // Approve erc20 and make bet
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
         vm.assertEq(erc20.balanceOf(alice), 0, "Amount taken for bet");
 
         // Prepare bob to bet, but abandon his bet
@@ -528,7 +585,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Prepare alice to bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Approve again, but fail due to repeated nonce
         bytes memory signature = preparePlaceBet(alice, aliceBetContext.request);
@@ -543,7 +600,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Prepare alice to bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result and Alice bet
         (ResultBlob memory resultBlob,,) = revealResult(
@@ -592,7 +649,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         aliceAmount = bound(aliceAmount, 1e6, 10e18);
         BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Too early to refund
         vm.expectRevert(
@@ -667,7 +724,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         aliceAmount = bound(aliceAmount, 1e6, 10e18);
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         (, ResultCommitment resultCommitment,) = revealResult(
             marketContext,
@@ -693,7 +750,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -712,7 +769,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -743,7 +800,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
             winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -769,7 +826,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
             winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -791,7 +848,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
             winningOutcomeMask: 0, // empty mask
@@ -860,7 +917,7 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
             winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -887,10 +944,10 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Alice and bob bet
         BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, bobAmount, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Winning mask is - "everyone wins", and so is full refund
         uint256 refundMask = (1 << marketContext.marketInfo.numOutcomes) - 1;
@@ -944,14 +1001,14 @@ contract MarketsTest is Test, DeployTestnet {
         // Alice and bob bet
         BetContext memory aliceBetContext =
             makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment, aliceWeight);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext =
             makeBetContext(bob, bobAmount, 0, 0, marketContext.marketCommitment, bobWeight);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         BetContext memory carolBetContext = makeBetContext(carol, carolAmount, 2, 0, marketContext.marketCommitment, 10);
-        placeBet(carol, carolBetContext.request);
+        placeBet(carolBetContext.request);
 
         // Alice and bob share win
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1003,7 +1060,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Prepare alice to bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1030,7 +1087,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Prepare alice to bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1056,7 +1113,7 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Prepare alice to bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1082,7 +1139,7 @@ contract MarketsTest is Test, DeployTestnet {
         uint256 winningOutcome = 0;
         BetContext memory aliceBetContext =
             makeBetContext(alice, 10e18, losingOutcome, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Reveal market result
         WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
@@ -1125,10 +1182,10 @@ contract MarketsTest is Test, DeployTestnet {
         // whoever put more wins
         uint256 winningOutcome = aliceAmount > bobAmount ? 0 : 1;
         BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 0, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, bobAmount, 1, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Change deadline for carol to be after market end. Will place the bet _after_ result reveal
         submissionDeadlineBlock = marketDeadlineBlock + 100;
@@ -1144,7 +1201,7 @@ contract MarketsTest is Test, DeployTestnet {
         (ResultBlob memory resultBlob,,) = revealResult(marketContext, resultInfo);
 
         // Place carol's bet after market settled
-        placeBet(carol, carolBetContext.request);
+        placeBet(carolBetContext.request);
 
         // Reveal carol's bet - it should just be a refund, no matter who won
         vm.assertEq(erc20.balanceOf(carol), 0, "Carol doesn't have any money");
@@ -1158,10 +1215,10 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Reveal market result
         (ResultBlob memory resultBlob,,) = revealResult(
@@ -1185,10 +1242,10 @@ contract MarketsTest is Test, DeployTestnet {
         MarketContext memory marketContext = makeMarketContext();
 
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Reveal market result
         (ResultBlob memory resultBlob,,) = revealResult(
@@ -1236,10 +1293,10 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Alice and bob bet
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, 20e18, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Reveal market result
         (ResultBlob memory resultBlob,,) = revealResult(
@@ -1340,10 +1397,10 @@ contract MarketsTest is Test, DeployTestnet {
             // Alice and bob bet
             BetContext memory aliceBetContext =
                 makeBetContext(alice, winningAmount, 1, i, marketContext.marketCommitment);
-            placeBet(alice, aliceBetContext.request);
+            placeBet(aliceBetContext.request);
 
             BetContext memory bobBetContext = makeBetContext(bob, losingAmount, 0, i, marketContext.marketCommitment);
-            placeBet(bob, bobBetContext.request);
+            placeBet(bobBetContext.request);
 
             // Reveal market result
             (ResultBlob memory resultBlob,,) = revealResult(
@@ -1428,17 +1485,17 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Alice bets
         BetContext memory aliceBetContext = makeBetContext(alice, 10e18, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         // Bob bets - he is the losing pot
         BetContext memory bobBetContext = makeBetContext(bob, 10e18, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // place bet on different market to have enough tokens to technically cover the extra fees
         {
             BetContext memory extraBetContext =
                 makeBetContext(bob, extra, 1, 1, makeMarketContext(0x23, 2).marketCommitment);
-            placeBet(bob, extraBetContext.request);
+            placeBet(extraBetContext.request);
         }
 
         // Reveal market result
@@ -1488,10 +1545,10 @@ contract MarketsTest is Test, DeployTestnet {
 
         // Alice and bob bet
         BetContext memory aliceBetContext = makeBetContext(alice, aliceAmount, 1, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, bobAmount, 0, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Due to bad result, alice will get a larger payout than is available
         (ResultBlob memory resultBlob, ResultCommitment resultCommitment,) = revealResult(
@@ -1537,9 +1594,9 @@ contract MarketsTest is Test, DeployTestnet {
             MarketContext memory marketContext = makeMarketContext();
 
             BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
-            placeBet(alice, aliceBetContext.request);
+            placeBet(aliceBetContext.request);
             BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
-            placeBet(bob, bobBetContext.request);
+            placeBet(bobBetContext.request);
 
             WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -1592,10 +1649,10 @@ contract MarketsTest is Test, DeployTestnet {
         {
             MarketContext memory marketContext = makeMarketContext();
             BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
-            placeBet(alice, aliceBetContext.request);
+            placeBet(aliceBetContext.request);
 
             bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
-            placeBet(bob, bobBetContext.request);
+            placeBet(bobBetContext.request);
 
             WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -1641,10 +1698,10 @@ contract MarketsTest is Test, DeployTestnet {
         ResultBlob memory resultBlob;
         {
             BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
-            placeBet(alice, aliceBetContext.request);
+            placeBet(aliceBetContext.request);
 
             BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
-            placeBet(bob, bobBetContext.request);
+            placeBet(bobBetContext.request);
 
             WeightedParimutuelMarkets.ResultInfo memory resultInfo = WeightedParimutuelMarkets.ResultInfo({
                 winningOutcomeMask: 1 << aliceBetContext.betInfo.outcome,
@@ -1676,10 +1733,10 @@ contract MarketsTest is Test, DeployTestnet {
         // Place bets, but change fees before reveals
         MarketContext memory marketContext = makeMarketContext();
         BetContext memory aliceBetContext = makeBetContext(alice, betAmount, 0, 0, marketContext.marketCommitment);
-        placeBet(alice, aliceBetContext.request);
+        placeBet(aliceBetContext.request);
 
         BetContext memory bobBetContext = makeBetContext(bob, betAmount, 1, 0, marketContext.marketCommitment);
-        placeBet(bob, bobBetContext.request);
+        placeBet(bobBetContext.request);
 
         // Set fees after bet placement
         vm.prank(admin);
