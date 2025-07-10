@@ -61,7 +61,7 @@ contract ReentryERC20 is TestERC20 {
     bool public hasReentered;
     ReentryParams public params;
 
-    constructor() {
+    constructor() TestERC20(18, "Reentry") {
         hasReentered = true;
     }
 
@@ -104,7 +104,7 @@ contract MarketsTest is Test, DeployTestnet {
         UPGRADE_SCRIPTS_BYPASS = true;
     }
 
-    function setUp() public {
+    function setUp() public virtual {
         admin = makeAddr("admin");
         alice = makeAddr("alice");
         bob = makeAddr("bob");
@@ -1758,5 +1758,14 @@ contract MarketsTest is Test, DeployTestnet {
         // No fees should be taken retroactively
         vm.assertEq(markets.operatorFees(erc20), 0, "Operator fees");
         vm.assertEq(markets.creatorFees(erc20, address(creator)), 0, "Creator fees");
+    }
+}
+
+/// Same tests but with 18 decimal place erc20
+contract MarketsTest18 is MarketsTest {
+    function setUp() public override {
+        MarketsTest.setUp();
+        // Set default erc20 contract to use 18 decimals
+        erc20 = erc20_18;
     }
 }
