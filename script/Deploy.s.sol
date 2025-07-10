@@ -56,13 +56,21 @@ contract Deploy is DeployBase {
 
 contract DeployTestnet is Deploy {
     TestERC20 public erc20;
+    TestERC20 public erc20_18;
 
     function setUpContracts(address admin) internal virtual override {
         Deploy.setUpContracts(admin);
 
         {
-            address implementation = setUpContract("TestERC20", "", "", false);
+            bytes memory constructorArgs = abi.encode(uint8(6), "TEST");
+            address implementation = setUpContract("TestERC20", constructorArgs, "TestERC20", false);
             erc20 = TestERC20(implementation);
+        }
+
+        {
+            bytes memory constructorArgs = abi.encode(uint8(18), "TEST2");
+            address implementation = setUpContract("TestERC20", constructorArgs, "Test2ERC20", false);
+            erc20_18 = TestERC20(implementation);
         }
     }
 }
