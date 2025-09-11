@@ -77,6 +77,32 @@ common pre/post conditions. Only the `BetRequest` structure is set in stone.
 A derived contract gets to choose what to put inside the `BetBlob`, `MarketBlob`
 and `ResultBlob` and how to interpret it for payout calculations. 
 
+## Making a deployment
+
+- Create new `.env.CHAIN_NAME` in the contracts directory and fill with the
+correct details following the [`.env.anvil`](./.env.anvil) template.
+- Launch anvil forked from the real chain:
+
+```bash
+cp .env.anvil .env.CHAIN_NAME
+# edit .env.CHAIN_NAME with the correct details
+source .env.CHAIN_NAME
+anvil -f ${RPC_URL}
+```
+
+- Do a dry run deployment on anvil
+
+```bash
+bun install
+bun run ./tools/typescript/deployContracts.ts CHAIN_NAME DeployTestnet --anvil-fork
+```
+
+- Deploy for real
+
+```bash
+bun run ./tools/typescript/deployContracts.ts CHAIN_NAME DeployTestnet --for-real
+```
+
 ## Current Deployments
 
 Most up-to-date addresses are available in the [deployments](./deployments/)
