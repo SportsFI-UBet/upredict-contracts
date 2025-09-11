@@ -76,3 +76,19 @@ common pre/post conditions. Only the `BetRequest` structure is set in stone.
 
 A derived contract gets to choose what to put inside the `BetBlob`, `MarketBlob`
 and `ResultBlob` and how to interpret it for payout calculations. 
+
+## Current Deployments
+
+Most up-to-date addresses are available in the [deployments](./deployments/)
+directory per chain. A list is also provided here, but is not guaranteed to be
+up-to-date:
+
+Testnets:
+
+- BNB testnet (chapel): [`0x2bDf19cA33444CdeEfbd65D8612d21A383a69A1a`](https://testnet.bscscan.com/address/0x2bDf19cA33444CdeEfbd65D8612d21A383a69A1a)
+- Base testnet: [`0xE649ED988e1B7E2dDa1FBAB88082c8C8E94FA336`](https://sepolia.basescan.org/address/0xE649ED988e1B7E2dDa1FBAB88082c8C8E94FA336)
+
+Mainnets:
+
+- BNB mainnet: [`0xab1fB9B0efA9235AFF385639611cB1BbbbCc3b40`](https://bscscan.com/address/0xab1fB9B0efA9235AFF385639611cB1BbbbCc3b40)
+- Base mainnet: [`0x5035608222e1C226781CAa22fe40D0DB6cc6c119`](https://basescan.org/address/0x5035608222e1C226781CAa22fe40D0DB6cc6c119)
