@@ -662,6 +662,7 @@ contract UpgradeScripts is Script {
         if (chainId == 5) return true; // Goerli
         if (chainId == 97) return true; // BSC Testnet
         if (chainId == 420) return true; // Optimism
+        if (chainId == 10143) return true; // Monad Testnet
         if (chainId == 31_337) return true; // Anvil
         if (chainId == 31_338) return true; // Anvil
         if (chainId == 80_001) return true; // Mumbai
