@@ -34,7 +34,7 @@ jobs:
           version: ${{ env.FOUNDRY_VERSION }}
 
       - name: Cache Foundry Compilers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.svm
           key: foundry-solc-cache-${{ runner.os }}
@@ -61,7 +61,7 @@ jobs:
           version: ${{ env.FOUNDRY_VERSION }}
 
       - name: Cache Foundry Compilers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.svm
           key: foundry-solc-cache-${{ runner.os }}
